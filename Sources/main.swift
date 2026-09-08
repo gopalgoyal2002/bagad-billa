@@ -16,6 +16,28 @@ struct TypingActivity {
     }
 }
 
+struct TerminalEvent: Decodable {
+    let kind: String
+    let code: Int
+    let duration: Int
+    let time: Double
+    let session: String
+    let app: String
+    var valid: Bool {
+        ["success","failure","attention"].contains(kind) && duration >= 0 && duration < 31536000 &&
+        session.count <= 32 && session.allSatisfy { $0.isLetter || $0.isNumber } &&
+        ["terminal","iterm","vscode","jetbrains","unknown"].contains(app)
+    }
+    var message: String {
+        let label = session == "terminal" ? "Terminal" : session
+        switch kind {
+        case "success": return "\(label): command finished"
+        case "failure": return "\(label): failed (\(code))"
+        default: return "\(label): needs your help"
+        }
+    }
+}
+
 struct WalkReminder {
     var next = 0.0
     mutating func due(at now: Double, enabled: Bool) -> Bool {
@@ -273,6 +295,13 @@ final class Companion: NSObject, NSApplicationDelegate {
     var audioCheck = 0.0
     var musicItem: NSMenuItem!
     var audioItem: NSMenuItem!
+    var terminalEnabled = UserDefaults.standard.object(forKey: "terminalEnabled") as? Bool ?? true
+    var terminalCheck = 0.0
+    var terminalSince = Date().timeIntervalSince1970
+    var terminalUntil = 0.0
+    var terminalMessage: String?
+    var terminalItem: NSMenuItem!
+    var terminalHistory = NSMenu(title: "Terminal activity")
     let counts = [6,8,8,4,5,8,6,6,6,8,8]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -329,6 +358,9 @@ final class Companion: NSObject, NSApplicationDelegate {
         if typingEnabled { requestTypingAccess() }
     }
     func buildMenu() {
+        terminalItem = add("Terminal notifications", #selector(toggleTerminal))
+        let history = NSMenuItem(title: "Recent terminal activity",action: nil,keyEquivalent: "")
+        history.submenu = terminalHistory; menu.addItem(history)
         let title = NSMenuItem(title: "Bagad Billi", action: nil, keyEquivalent: ""); menu.addItem(title)
         menu.addItem(.separator())
         add("Wave", #selector(wave)); add("Jump", #selector(jump)); add("Thinking", #selector(think))
@@ -371,6 +403,7 @@ final class Companion: NSObject, NSApplicationDelegate {
     }
     func tick() {
         let now = ProcessInfo.processInfo.systemUptime
+        if now >= terminalCheck { terminalCheck = now+1; checkTerminals() }
         if now >= permissionCheck { permissionCheck = now + 1; refreshTypingMonitor() }
         if now >= audioCheck { audioCheck = now+2; audioActive = autoAudio && outputActive() }
         let point = NSEvent.mouseLocation
@@ -438,11 +471,43 @@ final class Companion: NSObject, NSApplicationDelegate {
             let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + panel.frame.height * 0.68)
             if let d = direction(point.x - face.x, point.y - face.y) { row = 9 + d / 8; col = d % 8 }
         }
+        if now < terminalUntil { pet.caption = terminalMessage }
         if now < walkUntil { pet.caption = "Stand up & take a short walk" }
         pet.gazeDirection = row >= 9 ? (row-9)*8+col : nil
         pet.headphonesFitAvailable = row == 0 || row >= 9
         pet.sprite = images["\(row)-\(col)"]
     }
+    @objc func toggleTerminal() {
+        terminalEnabled.toggle(); UserDefaults.standard.set(terminalEnabled,forKey: "terminalEnabled")
+        terminalUntil = 0; terminalSince = Date().timeIntervalSince1970; syncOptions()
+    }
+    func checkTerminals() {
+        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BagadBilli/events")
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory,includingPropertiesForKeys: [.fileSizeKey,.isSymbolicLinkKey]) else { return }
+        var events: [TerminalEvent] = []
+        let wall = Date().timeIntervalSince1970
+        for file in files.prefix(256) where file.pathExtension == "json" {
+            guard let info = try? file.resourceValues(forKeys: [.fileSizeKey,.isSymbolicLinkKey]), info.isSymbolicLink != true,
+                  (info.fileSize ?? 9999) <= 1024,
+                  let data = try? Data(contentsOf: file), let event = try? JSONDecoder().decode(TerminalEvent.self,from: data),
+                  event.valid, event.time >= terminalSince, event.time <= wall+5, wall-event.time < 120 else { continue }
+            events.append(event)
+        }
+        terminalSince = floor(wall)-1
+        guard terminalEnabled else { return }
+        for event in events.sorted(by: { $0.time < $1.time }) {
+            // One event per session per second; ignore repeated polling of the same file.
+            let identity = "\(event.session)-\(event.time)-\(event.kind)-\(event.code)"
+            guard !seenTerminalEvents.contains(identity) else { continue }
+            seenTerminalEvents.append(identity); if seenTerminalEvents.count > 256 { seenTerminalEvents.removeFirst() }
+            terminalMessage = event.message; terminalUntil = ProcessInfo.processInfo.systemUptime+12
+            let item = NSMenuItem(title: event.message,action: nil,keyEquivalent: "")
+            terminalHistory.insertItem(item,at: 0)
+            if terminalHistory.items.count > 12 { terminalHistory.removeItem(at: 12) }
+            if event.kind == "attention" { playSound(purr: false) }
+        }
+    }
+    var seenTerminalEvents: [String] = []
     func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
     func announce(_ text: String, for duration: Double = 3) { notice = text; noticeUntil = ProcessInfo.processInfo.systemUptime+duration }
     func beginDrag() {
@@ -499,6 +564,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         return AudioObjectGetPropertyData(device,&address,0,nil,&size,&running) == noErr && running != 0
     }
     func syncOptions() {
+        terminalItem?.state = terminalEnabled ? .on : .off
         walkItem?.state = walkReminders ? .on : .off
         musicItem?.state = musicMode ? .on : .off; audioItem?.state = autoAudio ? .on : .off
         sleepItem?.state = autoSleep ? .on : .off; mischiefItem?.state = mischief ? .on : .off
@@ -631,6 +697,10 @@ final class Companion: NSObject, NSApplicationDelegate {
 extension NSRect { var center: NSPoint { NSPoint(x: midX,y: midY) } }
 
 if CommandLine.arguments.contains("--self-test") {
+    let terminal = TerminalEvent(kind: "failure",code: 1,duration: 4,time: 1,session: "ttys001",app: "vscode")
+    precondition(terminal.valid && terminal.message == "ttys001: failed (1)")
+    precondition(!TerminalEvent(kind: "execute",code: 0,duration: 0,time: 1,session: "terminal",app: "unknown").valid)
+    precondition(!TerminalEvent(kind: "success",code: 0,duration: 0,time: 1,session: "bad\nlabel",app: "unknown").valid)
     let cases: [(Double, Double, Int)] = [(0,100,0),(100,0,4),(0,-100,8),(-100,0,12),(100,100,2),(100,-100,6),(-100,-100,10),(-100,100,14)]
     for (x,y,want) in cases { precondition(direction(x,y) == want) }
     for i in 0..<16 {
