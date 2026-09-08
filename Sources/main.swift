@@ -117,21 +117,21 @@ final class PetView: NSView {
             // Ear-cup centers in each original 192x208 sprite, bottom-left coordinates.
             // The far cup is hidden for profile poses; both cups share the body transform.
             let fits: [(Double,Double,Double,Double,Bool)] = [
-                (40,163,132,163,false), (46,163,118,169,true),
-                (46,165,112,173,true), (54,166,119,174,true),
-                (87,171,121,163,true), (77,150,127,167,true),
-                (60,143,128,161,true), (67,134,143,153,false),
-                (41,150,127,150,false), (40,140,122,145,false),
-                (65,155,107,148,true), (65,156,103,151,true),
-                (67,153,98,151,true), (64,157,106,162,true),
-                (68,169,125,164,true), (70,173,133,165,true)
+                (43,183,125,183,false), (48,184,106,194,true),
+                (49,180,113,193,true), (57,180,119,193,true),
+                (96,183,119,181,true), (82,147,137,179,true),
+                (63,144,135,171,true), (73,133,148,158,false),
+                (39,158,125,158,false), (33,152,107,141,false),
+                (38,185,108,157,true), (60,184,111,160,true),
+                (43,183,94,166,true), (62,184,113,176,true),
+                (65,187,121,179,true), (68,188,135,181,true)
             ]
-            let f = gazeDirection.map { fits[$0] } ?? (42,153,139,153,false)
+            let f = gazeDirection.map { fits[$0] } ?? (43,181,128,181,false)
             let bx = body.width/192, by = body.height/208
             func point(_ x: Double,_ y: Double) -> NSPoint { NSPoint(x: body.minX+x*bx,y: body.minY+y*by) }
             let band = NSBezierPath()
             band.move(to: point(f.0,f.1))
-            band.curve(to: point(f.2,f.3),controlPoint1: point(f.0-3,max(f.1,f.3)+(f.4 ? 18 : 34)),controlPoint2: point(f.2+3,max(f.1,f.3)+(f.4 ? 18 : 34)))
+            band.curve(to: point(f.2,f.3),controlPoint1: point(f.0-3,max(f.1,f.3)+(f.4 ? 10 : 22)),controlPoint2: point(f.2+3,max(f.1,f.3)+(f.4 ? 10 : 22)))
             NSColor(calibratedWhite: 0.19,alpha: 1).setStroke(); band.lineWidth = 6*bx; band.stroke()
             let visible = f.4 ? [(gazeDirection! < 8 ? f.0 : f.2,gazeDirection! < 8 ? f.1 : f.3)] : [(f.0,f.1),(f.2,f.3)]
             for (x,y) in visible {
