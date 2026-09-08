@@ -265,7 +265,7 @@ final class ClaudeControl: NSObject {
         scroll.documentView = transcript; root.addSubview(scroll)
         input.frame = NSRect(x: 12,y: 58,width: 536,height: 30); input.autoresizingMask = [.width]; input.placeholderString = "Message or response to Claude…"; root.addSubview(input)
         for (title,selector,x) in [("Send",#selector(send),12.0),("Interrupt (Esc)",#selector(interrupt),100.0)] {
-            let button = NSButton(title: title,target: self,action: selector); button.frame = NSRect(x: x,y: 18,width: title == "Send" ? 80 : 135,height: 30); root.addSubview(button)
+            let button = NSButton(title: title,target: self,action: selector); button.bezelStyle = .rounded; button.contentTintColor = .black; button.bezelColor = .lightGray; button.frame = NSRect(x: x,y: 18,width: title == "Send" ? 80 : 135,height: 30); root.addSubview(button)
         }
         status.frame = NSRect(x: 245,y: 21,width: 300,height: 22); status.font = .systemFont(ofSize: 10); root.addSubview(status)
         update(session); window.center()
