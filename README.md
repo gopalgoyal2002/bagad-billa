@@ -165,3 +165,13 @@ The test requires a macOS environment allowing pseudo-terminals and local socket
 Click the cat, or right-click → Open personal assistant. Type `status` / `What needs me?`, `agents`, `focus`, `walk`, or `help`. Status summarizes recent terminal events from this app session, which may already be resolved. It does not infer unresolved work. Select a connected Claude session and click Open Claude for live output and input controls. The session picker updates as connections appear/disappear.
 
 This first stage is a local command interface, not a general language model. Unknown requests are not executed. No additional provider/network calls are made by the chat panel. Chat history is bounded and held in memory; Clear chat removes it. Click now opens the assistant; Wave remains in the pet menu. See docs/assistant-roadmap.md for planned, unimplemented stages.
+
+## General AI chat — stage 2
+
+Unrecognized local commands now go to Claude using the installed `~/.local/bin/claude` login. The banner makes this explicit. Local `status`, `agents`, `focus`, `walk`, and `help` still run locally. Claude's normal usage limits apply.
+
+Attach files opens a file picker: UTF-8 text only, up to 24 KB each and 48 KB total. Filenames and byte count are visible; attachment content is captured at selection time. Each AI request sends the message, the last four AI exchanges (bounded answer length), and the selected file content. No terminal snapshots, directories, or other context are added automatically. Remove files prevents resending the attachments; prior AI replies may still reflect their contents until Clear chat. Clear chat stops a request and clears conversation memory, but attachments stay visible until Remove files.
+
+AI runs in an isolated temporary working directory using Claude safe mode, no tools, no MCP servers, a dedicated system prompt, and no session persistence. It cannot execute commands or edit files. This relies on the installed Claude CLI supporting those flags; errors are shown rather than retrying with weaker settings. Claude retains its own service-side data policies and account behavior. Stop AI terminates the local request; it does not guarantee remote usage was not incurred. Requests time out after two minutes. Responses appear when complete.
+
+Validation includes a live minimal Claude request with no attached files (returned OK), native build/self-tests, and a rendered assistant layout. Memory, voice, external accounts, and approved action execution remain later stages.
