@@ -97,6 +97,18 @@ final class PetPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+final class PetVoiceButton: NSButton {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedRed: 0.12, green: 0.24, blue: 0.26, alpha: isHighlighted ? 1 : 0.94).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 12, yRadius: 12).fill()
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        ("Voice" as NSString).draw(in: NSRect(x: 23, y: 5, width: 53, height: 17), withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white, .paragraphStyle: paragraph])
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 17, y: 11, width: 4, height: 8), xRadius: 2, yRadius: 2).fill()
+        let mic = NSBezierPath(); mic.move(to: NSPoint(x: 14, y: 13)); mic.curve(to: NSPoint(x: 24, y: 13), controlPoint1: NSPoint(x: 14, y: 5), controlPoint2: NSPoint(x: 24, y: 5)); mic.move(to: NSPoint(x: 19, y: 8)); mic.line(to: NSPoint(x: 19, y: 5)); mic.lineWidth = 1.4; NSColor.white.setStroke(); mic.stroke()
+    }
+}
+
 final class PetView: NSView {
     var typingPhase: Int? = nil
     var home: PetHome = .none
@@ -467,13 +479,32 @@ final class Companion: NSObject, NSApplicationDelegate {
                 images[key] = image
             }
         }
-        panel = PetPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 167), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = PetPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 199), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        pet.owner = self; pet.frame = NSRect(origin: .zero, size: panel.frame.size)
-        panel.contentView = pet
+        let root = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
+        pet.owner = self; pet.frame = NSRect(x: 0, y: 32, width: 154, height: 167)
+        pet.autoresizingMask = [.width, .height]
+        root.addSubview(pet)
+        let voiceButton = PetVoiceButton(title: "Voice", target: self, action: #selector(openPetVoice))
+        voiceButton.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Voice")
+        voiceButton.imagePosition = .imageLeading
+        voiceButton.bezelStyle = .rounded
+        voiceButton.frame = NSRect(x: 33, y: 3, width: 88, height: 26)
+        voiceButton.autoresizingMask = [.minXMargin, .maxXMargin]
+        voiceButton.toolTip = "Open Gemini voice controls"
+        root.addSubview(voiceButton)
+        panel.contentView = root
+        if let index = CommandLine.arguments.firstIndex(of: "--render-pet-controls"), CommandLine.arguments.count > index+1 {
+            pet.sprite = images["0-0"]
+            if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
+            }
+            NSApp.terminate(nil); return
+        }
         let prefs = UserDefaults.standard
         autoSleep = prefs.object(forKey: "autoSleep") as? Bool ?? true
         mischief = prefs.object(forKey: "mischief") as? Bool ?? true
@@ -616,7 +647,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         let point = NSEvent.mouseLocation
         let distance = hypot(point.x-lastMouse.x,point.y-lastMouse.y)
         if distance > 0.5 { life.activity(at: now) }
-        let face = NSRect(x: panel.frame.minX+panel.frame.width*0.2,y: panel.frame.minY+panel.frame.height*0.55,width: panel.frame.width*0.6,height: panel.frame.height*0.35)
+        let face = NSRect(x: panel.frame.minX+panel.frame.width*0.2,y: panel.frame.minY+pet.frame.minY+pet.frame.height*0.55,width: panel.frame.width*0.6,height: pet.frame.height*0.35)
         if face.contains(point) && NSEvent.pressedMouseButtons == 0 && distance > 0.5 {
             if now-pettingWindow > 1.5 { pettingWindow = now; pettingTravel = 0 }
             pettingTravel += min(distance,30)
@@ -675,7 +706,7 @@ final class Companion: NSObject, NSApplicationDelegate {
             // AppKit mouse and window coordinates both use a bottom-left origin,
             // including negative coordinates on secondary displays.
             let point = NSEvent.mouseLocation
-            let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + panel.frame.height * 0.68)
+            let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + pet.frame.minY + pet.frame.height * 0.68)
             if let d = direction(point.x - face.x, point.y - face.y) { row = 9 + d / 8; col = d % 8 }
         }
         if now < terminalUntil { pet.caption = terminalMessage }
@@ -715,6 +746,10 @@ final class Companion: NSObject, NSApplicationDelegate {
         }
     }
     var seenTerminalEvents: [String] = []
+    @objc func openPetVoice() {
+        if terminalDesk == nil { terminalDesk = TerminalDesk() }
+        terminalDesk?.openVoice()
+    }
     @objc func openTerminals() {
         if terminalDesk == nil { terminalDesk = TerminalDesk() }
         terminalDesk?.show(above: panel.frame)
@@ -889,7 +924,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         if !NSScreen.screens.contains(where: { $0.visibleFrame.contains(panel.frame) }) { resetPosition() }
     }
     func resize(_ width: Double) {
-        panel.setContentSize(NSSize(width: width, height: width * 208 / 192)); screenChanged()
+        panel.setContentSize(NSSize(width: width, height: width * 208 / 192 + 32)); screenChanged()
     }
     @objc func small() { resize(115) }
     @objc func large() { resize(192) }

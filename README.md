@@ -168,3 +168,5 @@ Implementation: native AVAudioEngine microphone/playback and an ephemeral URLSes
 Validation: native build/self-tests include tool argument validation. `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --voice-tool-smoke` uses synthetic model calls and real owned shell tabs to test disabled control, stable target routing, duplicate suppression, actual shell delivery, cancellation, and the stop gate. It makes no Gemini request and does not open the microphone. Live authentication, speech recognition, microphone hardware, and reply playback require testing with your key and devices.
 
 Protocol references: [Google Live WebSocket reference](https://ai.google.dev/api/live) and [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
+
+The **Voice** microphone button directly below the pet opens Gemini voice controls. It follows the pet when dragged and stays visible at both pet sizes. Opening it does not start the microphone; use **Start voice** when ready. The Terminal Desk toolbar also has a Voice button.
