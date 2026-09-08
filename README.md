@@ -143,3 +143,28 @@ This is an interactive zsh terminal, not an AI command interpreter. Commands you
 Rendering uses locally bundled xterm.js 5.5.0 and addon-fit 0.10.0, with their MIT licenses in Resources/terminal. No CDN or local network server is used. A Python helper owns each pseudo-terminal over private process pipes. The web view is limited to its bundled page, blocks network content, and receives output as bytes rather than HTML. Python and WebKit are needed at runtime, in addition to the macOS requirements above.
 
 Tests: `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_terminal_host.py` verifies shell execution, resize, Ctrl-C, tab isolation, and shutdown using harmless commands. A logged-in GUI session can run `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --terminal-smoke "$PWD/build/terminal-preview.png"` to verify real shell output reaches the embedded renderer. These tests require PTY access.
+
+## Gemini Live voice for pet terminals
+
+Click **Voice** in Terminal Desk. Enter a Gemini API key in the secure field (never in source code or chat), keep the suggested Live model or enter one available to your account, and click **Start voice**. Grant macOS microphone permission when asked. The key is kept in app memory only; it is not saved to preferences, files, or logs. Google API billing/quota applies; a consumer Gemini subscription is not automatically an API credential.
+
+To allow actions, enable **Allow voice to control this pet’s terminals**. Try:
+
+- “List my terminals.”
+- “Create a new terminal.”
+- “In terminal 2, type claude and press Enter.”
+- “Send hello to terminal 2 without pressing Enter.”
+- “Send Control-C to terminal 2.”
+- “Press Escape in terminal 2.”
+
+IDs are the stable numbers shown in the tab labels for this app run. New tabs start in your home directory. Only ready, running tabs created by the pet can receive input. Input is a single line, up to 16 KB; control characters are rejected except the separately implemented Enter and interrupt keys. A queued input result does not mean its command succeeded. Claude-specific interactive prompts remain Claude’s responsibility; the voice feature does not auto-approve them. Commands spoken and submitted have your normal terminal permissions. Verify the target and action in the voice window's visible transcript/tool log. Disable terminal control when only chatting.
+
+**Mute** stops sending microphone chunks while leaving the connection/audio engine open; **Stop** disconnects and releases audio capture/playback. Closing the voice window or quitting the pet also stops voice. No background listening starts at launch. Talking over Gemini clears its queued reply audio when the server reports interruption. Use headphones if your audio device's echo cancellation is unavailable. Reconnect after session expiry or device/network failures; session resumption is not implemented.
+
+Scope is intentionally limited to listing/creating pet terminals, sending requested text, and Ctrl-C/Escape. It has no access to external terminal windows, files, or pet configuration. The app does not upload terminal output. The voice stream, transcription, tool definitions, terminal IDs/folder labels, and tool results are exchanged with Google while connected. Audio/transcripts are not saved by the pet; the on-screen log is bounded in memory. Google's service data policies still apply. The app keeps a per-session tool-call cache so duplicate IDs do not repeat actions and ignores cancelled or post-disconnect calls.
+
+Implementation: native AVAudioEngine microphone/playback and an ephemeral URLSession WebSocket to Google's Live API. Sends 16-bit PCM at the input device's reported rate (Gemini supports resampling) and plays 24 kHz PCM replies. Uses `gemini-3.1-flash-live-preview` by default; preview availability can change. No extra package or server is required.
+
+Validation: native build/self-tests include tool argument validation. `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --voice-tool-smoke` uses synthetic model calls and real owned shell tabs to test disabled control, stable target routing, duplicate suppression, actual shell delivery, cancellation, and the stop gate. It makes no Gemini request and does not open the microphone. Live authentication, speech recognition, microphone hardware, and reply playback require testing with your key and devices.
+
+Protocol references: [Google Live WebSocket reference](https://ai.google.dev/api/live) and [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities).

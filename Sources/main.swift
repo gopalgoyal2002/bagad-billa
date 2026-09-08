@@ -248,6 +248,7 @@ final class EmbeddedTerminal: NSObject, WKScriptMessageHandler, WKNavigationDele
     let output = Pipe()
     let directory: URL
     let writer = DispatchQueue(label: "bagad.terminal.input")
+    var number = 0
     var closed = false
     var started = false
     var ready = false
@@ -314,12 +315,13 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     let tabs = NSTabView()
     var terminals: [EmbeddedTerminal] = []
     var counter = 0
+    var voice: GeminiVoice?
     override init() {
         super.init(); window.title = "Bagad Billa · Terminal Desk"; window.isReleasedWhenClosed = false; window.delegate = self
-        window.minSize = NSSize(width: 520,height: 280); window.level = .floating
+        window.minSize = NSSize(width: 650,height: 280); window.level = .floating
         let root = window.contentView!
         tabs.frame = NSRect(x: 8,y: 8,width: 704,height: 382); tabs.autoresizingMask = [.width,.height]; tabs.delegate = self; root.addSubview(tabs)
-        for (title,selector,x,width) in [("+ Terminal",#selector(addDefault),8.0,100.0),("+ In folder…",#selector(addFolder),112.0,110.0),("End tab",#selector(closeTab),226.0,85.0),("Expand",#selector(expand),315.0,80.0),("Paste",#selector(paste),399.0,70.0),("Copy",#selector(copyText),473.0,70.0)] {
+        for (title,selector,x,width) in [("+ Terminal",#selector(addDefault),8.0,100.0),("+ In folder…",#selector(addFolder),112.0,110.0),("End tab",#selector(closeTab),226.0,85.0),("Expand",#selector(expand),315.0,80.0),("Paste",#selector(paste),399.0,70.0),("Copy",#selector(copyText),473.0,70.0),("Voice",#selector(openVoice),547.0,75.0)] {
             let b = NSButton(title: title,target: self,action: selector); b.bezelStyle = .rounded; b.frame = NSRect(x: x,y: 402,width: width,height: 28); b.autoresizingMask = [.minYMargin]; root.addSubview(b)
         }
         addDefault()
@@ -331,7 +333,7 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     }
     func add(_ directory: URL) {
         counter += 1
-        let terminal = EmbeddedTerminal(directory: directory); terminals.append(terminal)
+        let terminal = EmbeddedTerminal(directory: directory); terminal.number = counter; terminals.append(terminal)
         let tab = NSTabViewItem(identifier: terminal); tab.label = "\(counter) · \(directory.lastPathComponent)"; tab.view = terminal.web
         tabs.addTabViewItem(tab); tabs.selectTabViewItem(tab)
         window.title = "Bagad Billa · Terminal Desk · \(terminals.count) tabs"
@@ -367,7 +369,23 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
         NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); selected?.focus()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { window.orderOut(nil); return false }
-    func shutdown() { terminals.forEach { $0.stop() } }
+    @objc func openVoice() { if voice == nil { voice = GeminiVoice(desk: self) }; voice?.show() }
+    func voiceAction(_ action: VoiceTerminalAction) -> [String:Any] {
+        if action.name == "list_terminals" {
+            return ["terminals":terminals.map { ["id":$0.number,"folder":$0.directory.lastPathComponent,"ready":$0.ready && $0.process?.isRunning == true,"selected":$0 === selected] as [String:Any] }]
+        }
+        if action.name == "create_terminal" { addDefault(); return ["created_terminal_id":counter,"status":"starting; list terminals before sending"] }
+        guard let id = action.terminalID,let terminal = terminals.first(where: { $0.number == id }),terminal.ready,terminal.process?.isRunning == true,!terminal.closed else { return ["error":"That pet terminal does not exist or is not ready."] }
+        if let tab = tabs.tabViewItems.first(where: { ($0.identifier as? EmbeddedTerminal) === terminal }) { tabs.selectTabViewItem(tab) }
+        if action.name == "send_terminal" {
+            let data = Data((action.text+(action.submit ? "\r" : "")).utf8)
+            terminal.send(["kind":"input","data":data.base64EncodedString()])
+            return ["status":"queued input; command outcome unknown","terminal_id":id,"text":action.text,"submitted":action.submit]
+        }
+        terminal.send(["kind":"input","data":Data([action.key == "escape" ? 27 : 3]).base64EncodedString()])
+        return ["status":"queued interrupt key; process outcome unknown","terminal_id":id,"key":action.key]
+    }
+    func shutdown() { voice?.stop(); terminals.forEach { $0.stop() } }
 }
 
 final class Companion: NSObject, NSApplicationDelegate {
@@ -486,6 +504,37 @@ final class Companion: NSObject, NSApplicationDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--diagnostics"), CommandLine.arguments.count > index+1 {
             let report = "accessibilityTrusted=\(AXIsProcessTrusted())\ntypingEnabled=\(typingEnabled)\nglobalMonitor=\(globalKeys != nil)\n"
             try? report.write(toFile: CommandLine.arguments[index+1],atomically: true,encoding: .utf8)
+        }
+        if CommandLine.arguments.contains("--voice-tool-smoke") {
+            openTerminals(); let desk = terminalDesk!; desk.openVoice(); let voice = desk.voice!
+            voice.connected = true
+            func call(_ id: String,_ name: String,_ args: [String:Any]) { voice.handle(["toolCall":["functionCalls":[["id":id,"name":name,"args":args]]]]) }
+            let initial = desk.terminals.count
+            call("blocked","create_terminal",[:]); precondition(desk.terminals.count == initial)
+            voice.actions.state = .on
+            call("new","create_terminal",[:]); call("new","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+            call("missing","send_terminal",["terminal_id":99999,"text":"bad","submit":true]); precondition(voice.replies["missing"]?["response"] as? [String:String] != nil)
+            let target = desk.terminals.last!
+            var tries = 0
+            Timer.scheduledTimer(withTimeInterval: 0.5,repeats: true) { timer in
+                tries += 1
+                if target.ready {
+                    timer.invalidate()
+                    call("send","send_terminal",["terminal_id":target.number,"text":"printf 'VOICE_%s\\n' 'ROUTE_OK'","submit":true])
+                    DispatchQueue.main.asyncAfter(deadline: .now()+2) {
+                        target.web.evaluateJavaScript("Array.from({length:term.buffer.active.length},(_,i)=>term.buffer.active.getLine(i).translateToString()).join('\\n')") { result,_ in
+                            guard (result as? String)?.contains("VOICE_ROUTE_OK") == true else { print("FAIL voice terminal input"); voice.stop(); desk.shutdown(); exit(1) }
+                            call("interrupt","interrupt_terminal",["terminal_id":target.number,"key":"ctrl_c"])
+                            voice.handle(["toolCallCancellation":["ids":["cancelled"]]])
+                            call("cancelled","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+                            voice.stop(); call("after-stop","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+                            print("PASS: voice tool toggle, stable target IDs, duplicate suppression, shell delivery, cancellation, and stop gate")
+                            NSApp.terminate(nil)
+                        }
+                    }
+                } else if tries > 30 { timer.invalidate(); desk.shutdown(); exit(1) }
+            }
+            return
         }
         if let index = CommandLine.arguments.firstIndex(of: "--terminal-smoke"), CommandLine.arguments.count > index+1 {
             openTerminals()
@@ -859,6 +908,13 @@ final class Companion: NSObject, NSApplicationDelegate {
 extension NSRect { var center: NSPoint { NSPoint(x: midX,y: midY) } }
 
 if CommandLine.arguments.contains("--self-test") {
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"claude","submit":true]) != nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":true,"text":"claude","submit":true]) == nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"a\nb","submit":true]) == nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"ok"]) == nil)
+    precondition(VoiceTerminalAction.parse("delete_files",[:]) == nil)
+    precondition(VoiceTerminalAction.parse("interrupt_terminal",["terminal_id":2,"key":"escape"]) != nil)
+    precondition(VoiceTerminalAction.parse("interrupt_terminal",["terminal_id":-1]) == nil)
     let terminal = TerminalEvent(kind: "failure",code: 1,duration: 4,time: 1,session: "ttys001",app: "vscode")
     precondition(terminal.valid && terminal.message == "ttys001: failed (1)")
     precondition(!TerminalEvent(kind: "execute",code: 0,duration: 0,time: 1,session: "terminal",app: "unknown").valid)
@@ -902,6 +958,14 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-voice"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let desk = TerminalDesk(); let voice = GeminiVoice(desk: desk)
+    let view = voice.window.contentView!; view.wantsLayer = true; view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds,to: rep)
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
+    desk.shutdown()
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let canvas = NSImage(size: NSSize(width: 768,height: 832))
