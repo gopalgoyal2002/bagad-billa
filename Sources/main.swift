@@ -1,0 +1,678 @@
+import AppKit
+import ApplicationServices
+import CoreAudio
+
+struct TypingActivity {
+    var until = 0.0
+    var presses: [Double] = []
+    mutating func pulse(at time: Double) {
+        until = time + 0.7
+        presses = Array(presses.filter { time - $0 < 2 }.suffix(39)); presses.append(time)
+    }
+    func active(at time: Double) -> Bool { time < until }
+    func cadence(at time: Double) -> Double {
+        let rate = Double(presses.filter { time - $0 < 2 }.count) / 2
+        return rate >= 6 ? 0.065 : rate >= 2.5 ? 0.12 : 0.22
+    }
+}
+
+struct WalkReminder {
+    var next = 0.0
+    mutating func due(at now: Double, enabled: Bool) -> Bool {
+        guard enabled, now >= next else { return false }
+        next = now + 1200
+        return true
+    }
+}
+
+enum PetHome: String { case none, cushion, box }
+
+struct LifeState {
+    var lastActivity = 0.0
+    var sleepAfter = 180.0
+    var forcedNap = false
+    var focusEnd: Double? = nil
+    var nextBreak = 0.0
+    var breakInterval = 1800.0
+    mutating func activity(at now: Double) { lastActivity = now; forcedNap = false }
+    func sleeping(at now: Double, autoSleep: Bool) -> Bool {
+        (focusEnd.map { now < $0 } ?? false) || forcedNap || (autoSleep && now - lastActivity >= sleepAfter)
+    }
+    mutating func completeFocus(at now: Double) -> Bool {
+        guard let end = focusEnd, now >= end else { return false }
+        focusEnd = nil; activity(at: now); nextBreak = now + breakInterval; return true
+    }
+    mutating func breakDue(at now: Double, enabled: Bool, sleeping: Bool) -> Bool {
+        guard enabled, focusEnd == nil, !sleeping, now >= nextBreak else { return false }
+        nextBreak = now + breakInterval; return true
+    }
+}
+
+struct Excursion {
+    enum Kind { case treat, chase }
+    var kind: Kind
+    var origin: NSPoint
+    var target: NSPoint
+    var start: Double
+    var duration: Double
+    func position(at now: Double) -> NSPoint {
+        let progress = min(1, max(0, (now-start)/duration))
+        let travel = progress < 0.4 ? progress/0.4 : progress < 0.6 ? 1 : (1-progress)/0.4
+        let eased = travel * travel * (3 - 2 * travel)
+        return NSPoint(x: origin.x + (target.x-origin.x)*eased, y: origin.y + (target.y-origin.y)*eased)
+    }
+}
+
+func direction(_ dx: Double, _ dy: Double) -> Int? {
+    guard hypot(dx, dy) > 22 else { return nil }
+    let degrees = atan2(dx, dy) * 180 / .pi
+    return Int((degrees + 360).truncatingRemainder(dividingBy: 360) / 22.5 + 0.5) % 16
+}
+
+final class PetPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+final class PetView: NSView {
+    var typingPhase: Int? = nil
+    var home: PetHome = .none
+    var homeDepth = 0.0
+    var snoozing = false
+    var happy = false
+    var stretching = false
+    var headphones = false
+    var clock = 0.0
+    var caption: String? = nil
+    var sprite: NSImage? { didSet { needsDisplay = true } }
+    var downPoint = NSPoint.zero
+    var downOrigin = NSPoint.zero
+    var moved = false
+    weak var owner: Companion?
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.setFill(); bounds.fill()
+        let sx = bounds.width / 192, sy = bounds.height / 208
+        if home == .cushion {
+            NSColor(calibratedRed: 0.35, green: 0.52, blue: 0.48, alpha: 1).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 7*sx,y: 0,width: 178*sx,height: 30*sy)).fill()
+            NSColor(calibratedRed: 0.53, green: 0.68, blue: 0.62, alpha: 1).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 14*sx,y: 7*sy,width: 164*sx,height: 22*sy)).fill()
+        } else if home == .box {
+            NSColor(calibratedRed: 0.58, green: 0.36, blue: 0.19, alpha: 1).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 12*sx,y: 2*sy,width: 168*sx,height: 67*sy), xRadius: 4*sx, yRadius: 4*sy).fill()
+        }
+        var body = bounds
+        body.origin.y -= homeDepth * 17 * sy
+        if snoozing { body.size.height -= (1 + sin(clock*1.8))*1.5*sy }
+        if headphones && !snoozing { body.origin.y += sin(clock*4)*2*sy }
+        if happy { body.origin.y += sin(clock*5)*1.2*sy }
+        if stretching {
+            let lift = max(0, sin(clock*2.5))
+            body.size.height -= 8*sy; body.origin.y += lift*6*sy
+        }
+        sprite?.draw(in: body, from: .zero, operation: .sourceOver, fraction: 1)
+        if headphones {
+            let bob = !snoozing ? sin(clock*4)*2*sy : 0
+            NSColor(calibratedWhite: 0.19,alpha: 1).setStroke()
+            let band = NSBezierPath()
+            band.move(to: NSPoint(x: 42*sx,y: 123*sy+bob))
+            band.curve(to: NSPoint(x: 150*sx,y: 123*sy+bob),controlPoint1: NSPoint(x: 34*sx,y: 199*sy+bob),controlPoint2: NSPoint(x: 158*sx,y: 199*sy+bob))
+            band.lineWidth = 8*sx; band.stroke()
+            for x in [35.0,140.0] {
+                NSColor(calibratedWhite: 0.16,alpha: 1).setFill()
+                NSBezierPath(roundedRect: NSRect(x: x*sx,y: 113*sy+bob,width: 19*sx,height: 37*sy),xRadius: 7*sx,yRadius: 7*sy).fill()
+                NSColor.systemTeal.setFill()
+                NSBezierPath(roundedRect: NSRect(x: (x+4)*sx,y: 119*sy+bob,width: 11*sx,height: 25*sy),xRadius: 4*sx,yRadius: 4*sy).fill()
+            }
+        }
+        if home == .box {
+            NSColor(calibratedRed: 0.76, green: 0.54, blue: 0.32, alpha: 1).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 10*sx,y: 0,width: 172*sx,height: 39*sy),xRadius: 3*sx,yRadius: 3*sy).fill()
+            NSColor(calibratedRed: 0.90, green: 0.73, blue: 0.48, alpha: 1).setFill()
+            NSRect(x: 88*sx,y: 0,width: 16*sx,height: 39*sy).fill()
+        }
+        if snoozing { label("z z z", at: NSRect(x: 140*sx,y: 150*sy,width: 45*sx,height: 20*sy),size: 12*sx) }
+        if happy { label("♡", at: NSRect(x: 140*sx,y: 155*sy,width: 36*sx,height: 25*sy),size: 22*sx) }
+        if let phase = typingPhase {
+            // Runtime vector keyboard; no typed characters are displayed or stored.
+            let sx = bounds.width / 192, sy = bounds.height / 208
+            let board = NSRect(x: 33*sx, y: 9*sy, width: 126*sx, height: 35*sy)
+            NSColor(calibratedWhite: 0.22, alpha: 1).setFill()
+            NSBezierPath(roundedRect: board, xRadius: 5*sx, yRadius: 5*sy).fill()
+            for r in 0..<3 { for c in 0..<10 {
+                let key = NSRect(x: (39+Double(c)*11.5)*sx, y: (14+Double(r)*8)*sy, width: 8.5*sx, height: 5.5*sy)
+                (c == (phase % 2 == 0 ? 2 : 7) && r == 1 ? NSColor.systemTeal : NSColor(calibratedWhite: 0.68, alpha: 1)).setFill()
+                NSBezierPath(roundedRect: key, xRadius: sx, yRadius: sy).fill()
+            } }
+            for side in 0..<2 {
+                let lift = phase % 2 == side ? 0.0 : 7.0
+                let paw = NSRect(x: (57+Double(side)*52)*sx, y: (28+lift)*sy, width: 24*sx, height: 18*sy)
+                NSColor(calibratedRed: 0.95, green: 0.80, blue: 0.56, alpha: 1).setFill()
+                let shape = NSBezierPath(ovalIn: paw); shape.fill()
+                NSColor(calibratedRed: 0.62, green: 0.44, blue: 0.26, alpha: 1).setStroke()
+                shape.lineWidth = 0.8*sx; shape.stroke()
+            }
+        }
+        if let text = caption {
+            let area = NSRect(x: 3*sx,y: bounds.height-22*sy,width: bounds.width-6*sx,height: 21*sy)
+            NSColor(calibratedWhite: 0.12, alpha: 0.93).setFill()
+            NSBezierPath(roundedRect: area, xRadius: 7*sx,yRadius: 7*sy).fill()
+            label(text,at: area.insetBy(dx: 2*sx,dy: 3*sy),size: 10*sx,color: .white)
+        }
+    }
+    func label(_ text: String, at rect: NSRect, size: Double, color: NSColor = .darkGray) {
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        (text as NSString).draw(in: rect,withAttributes: [.font: NSFont.systemFont(ofSize: size,weight: .medium),.foregroundColor: color,.paragraphStyle: paragraph])
+    }
+    override func mouseDown(with event: NSEvent) {
+        owner?.beginDrag()
+        downPoint = NSEvent.mouseLocation
+        downOrigin = window?.frame.origin ?? .zero
+        moved = false
+    }
+    override func mouseDragged(with event: NSEvent) {
+        let point = NSEvent.mouseLocation
+        let dx = point.x - downPoint.x, dy = point.y - downPoint.y
+        guard hypot(dx, dy) > 3 else { return }
+        moved = true
+        window?.setFrameOrigin(NSPoint(x: downOrigin.x + dx, y: downOrigin.y + dy))
+        owner?.play(dx < 0 ? 2 : 1, duration: 0.2)
+    }
+    override func mouseUp(with event: NSEvent) {
+        if moved { owner?.screenChanged(); owner?.savePosition() }
+        else { owner?.play(event.clickCount > 1 ? 4 : 3, duration: 0.9) }
+    }
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = owner?.menu { NSMenu.popUpContextMenu(menu, with: event, for: self) }
+    }
+}
+
+final class TreatView: NSView {
+    weak var owner: Companion?
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.setFill(); bounds.fill()
+        NSColor(calibratedRed: 0.93,green: 0.63,blue: 0.35,alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 9,y: 9,width: 29,height: 20)).fill()
+        let tail = NSBezierPath(); tail.move(to: NSPoint(x: 11,y: 19)); tail.line(to: NSPoint(x: 1,y: 8));tail.line(to: NSPoint(x: 1,y: 30));tail.close();tail.fill()
+        NSColor.black.setFill(); NSBezierPath(ovalIn: NSRect(x: 29,y: 20,width: 3,height: 3)).fill()
+    }
+    override func mouseDown(with event: NSEvent) { owner?.eatTreat() }
+}
+
+final class Companion: NSObject, NSApplicationDelegate {
+    var panel: PetPanel!
+    var pet = PetView()
+    var status: NSStatusItem!
+    let menu = NSMenu()
+    var images: [String: NSImage] = [:]
+    var timer: Timer?
+    var paused = false
+    var pauseItem: NSMenuItem!
+    var actionRow = 0
+    var actionStart = 0.0
+    var actionUntil = 0.0
+    var typing = TypingActivity()
+    var typingEnabled = UserDefaults.standard.object(forKey: "typingEnabled") as? Bool ?? true
+    var globalKeys: Any?
+    var localKeys: Any?
+    var permissionCheck = 0.0
+    var typingItem: NSMenuItem!
+    var typingStatus: NSMenuItem!
+    var lastKeyActivity = 0.0
+    var permissionItem: NSMenuItem!
+    var life = LifeState()
+    var autoSleep = true
+    var mischief = true
+    var breakReminders = true
+    var walkReminders = true
+    var walk = WalkReminder()
+    var walkUntil = 0.0
+    var walkItem: NSMenuItem!
+    var sounds = false
+    var home: PetHome = .cushion
+    var lastMouse = NSPoint.zero
+    var pettingTravel = 0.0
+    var pettingWindow = 0.0
+    var pettingUntil = 0.0
+    var lastPetSound = 0.0
+    var lastChase = 0.0
+    var excursion: Excursion?
+    var treatPanel: PetPanel?
+    var treatExpires = 0.0
+    var notice: String?
+    var noticeUntil = 0.0
+    var stretchUntil = 0.0
+    var focusItem: NSMenuItem!
+    var sleepItem: NSMenuItem!
+    var mischiefItem: NSMenuItem!
+    var breakItem: NSMenuItem!
+    var soundItem: NSMenuItem!
+    var homeItems: [PetHome: NSMenuItem] = [:]
+    var sound: NSSound?
+    var musicMode = false
+    var autoAudio = UserDefaults.standard.object(forKey: "autoAudio") as? Bool ?? true
+    var audioActive = false
+    var audioCheck = 0.0
+    var musicItem: NSMenuItem!
+    var audioItem: NSMenuItem!
+    let counts = [6,8,8,4,5,8,6,6,6,8,8]
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let resources = Bundle.main.resourceURL else { NSApp.terminate(nil); return }
+        for row in 0..<11 {
+            for col in 0..<counts[row] {
+                let key = "\(row)-\(col)"
+                guard let image = NSImage(contentsOf: resources.appendingPathComponent("frames/\(key).png")) else {
+                    let alert = NSAlert(); alert.messageText = "Bagad Billi’s artwork is missing."
+                    alert.informativeText = "Keep the complete app bundle together."; alert.runModal()
+                    NSApp.terminate(nil); return
+                }
+                images[key] = image
+            }
+        }
+        panel = PetPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 167), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.level = .floating; panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        pet.owner = self; pet.frame = NSRect(origin: .zero, size: panel.frame.size)
+        panel.contentView = pet
+        let prefs = UserDefaults.standard
+        autoSleep = prefs.object(forKey: "autoSleep") as? Bool ?? true
+        mischief = prefs.object(forKey: "mischief") as? Bool ?? true
+        breakReminders = prefs.object(forKey: "breakReminders") as? Bool ?? true
+        walkReminders = prefs.object(forKey: "walkReminders") as? Bool ?? true
+        sounds = prefs.bool(forKey: "sounds")
+        home = PetHome(rawValue: prefs.string(forKey: "home") ?? "cushion") ?? .cushion
+        let start = ProcessInfo.processInfo.systemUptime
+        life.lastActivity = start; life.nextBreak = start + life.breakInterval; lastChase = start
+        lastMouse = NSEvent.mouseLocation
+        walk.next = start + 1200
+        buildMenu()
+        status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        status.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Bagad Billi")
+        status.menu = menu
+        // Read the saved position before defaults can overwrite it.
+        var restored = false
+        if let x = prefs.object(forKey: "petX") as? Double, let y = prefs.object(forKey: "petY") as? Double {
+            let candidate = NSRect(x: x, y: y, width: panel.frame.width, height: panel.frame.height)
+            if NSScreen.screens.contains(where: { $0.visibleFrame.contains(candidate) }) { panel.setFrameOrigin(candidate.origin); restored = true }
+        }
+        if !restored { resetPosition() }
+        panel.orderFrontRegardless()
+        tick()
+        timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(timer!, forMode: .common)
+        NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        if let index = CommandLine.arguments.firstIndex(of: "--diagnostics"), CommandLine.arguments.count > index+1 {
+            let report = "accessibilityTrusted=\(AXIsProcessTrusted())\ntypingEnabled=\(typingEnabled)\nglobalMonitor=\(globalKeys != nil)\n"
+            try? report.write(toFile: CommandLine.arguments[index+1],atomically: true,encoding: .utf8)
+        }
+        if typingEnabled { requestTypingAccess() }
+    }
+    func buildMenu() {
+        let title = NSMenuItem(title: "Bagad Billi", action: nil, keyEquivalent: ""); menu.addItem(title)
+        menu.addItem(.separator())
+        add("Wave", #selector(wave)); add("Jump", #selector(jump)); add("Thinking", #selector(think))
+        add("Pet Bagad Billa", #selector(petNow)); add("Give a fish treat", #selector(giveTreat))
+        add("Nap now", #selector(nap)); add("Stretch now", #selector(stretch))
+        add("Play with cursor", #selector(playCursor))
+        menu.addItem(.separator())
+        focusItem = add("Focus timer: off", #selector(startFocus))
+        add("Start 5-minute focus", #selector(shortFocus))
+        add("Try a 10-second focus", #selector(testFocus))
+        add("Cancel focus", #selector(cancelFocus))
+        menu.addItem(.separator())
+        sleepItem = add("Auto nap after 3 minutes", #selector(toggleSleep))
+        mischiefItem = add("Occasional cursor play", #selector(toggleMischief))
+        walkItem = add("Walk reminders every 20 minutes", #selector(toggleWalk))
+        add("Preview walk reminder", #selector(remindWalk))
+        breakItem = add("Stretch reminders every 30 minutes", #selector(toggleBreaks))
+        musicItem = add("Headphones — manual music mode", #selector(toggleMusic))
+        audioItem = add("Auto headphones when audio output is active", #selector(toggleAudio))
+        soundItem = add("Sounds and purring", #selector(toggleSounds))
+        for (name, style) in [("No home",PetHome.none),("Cushion",PetHome.cushion),("Cardboard box",PetHome.box)] {
+            let item = add(name,#selector(selectHome(_:))); item.representedObject = style.rawValue; homeItems[style] = item
+        }
+        menu.addItem(.separator())
+        pauseItem = add("Pause cursor following", #selector(togglePause))
+        typingItem = add("Typing reactions", #selector(toggleTyping))
+        typingStatus = NSMenuItem(title: "Typing detection: checking…",action: nil,keyEquivalent: ""); menu.addItem(typingStatus)
+        add("Open keyboard permission settings…", #selector(openTypingSettings))
+        permissionItem = add("Allow typing detection…", #selector(requestTypingAccess))
+        add("Preview typing", #selector(previewTyping))
+        add("Reset position", #selector(resetPosition))
+        add("Small", #selector(small)); add("Large", #selector(large))
+        menu.addItem(.separator()); add("Quit Bagad Billi", #selector(quit), "q")
+    }
+    @discardableResult func add(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key); item.target = self; menu.addItem(item); return item
+    }
+    func play(_ row: Int, duration: Double) {
+        actionRow = row; actionStart = ProcessInfo.processInfo.systemUptime; actionUntil = actionStart + duration
+    }
+    func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now >= permissionCheck { permissionCheck = now + 1; refreshTypingMonitor() }
+        if now >= audioCheck { audioCheck = now+2; audioActive = autoAudio && outputActive() }
+        let point = NSEvent.mouseLocation
+        let distance = hypot(point.x-lastMouse.x,point.y-lastMouse.y)
+        if distance > 0.5 { life.activity(at: now) }
+        let face = NSRect(x: panel.frame.minX+panel.frame.width*0.2,y: panel.frame.minY+panel.frame.height*0.55,width: panel.frame.width*0.6,height: panel.frame.height*0.35)
+        if face.contains(point) && NSEvent.pressedMouseButtons == 0 && distance > 0.5 {
+            if now-pettingWindow > 1.5 { pettingWindow = now; pettingTravel = 0 }
+            pettingTravel += min(distance,30)
+            if pettingTravel > 55 { petNow(); pettingTravel = 0 }
+        } else if !face.contains(point) { pettingTravel = 0 }
+        lastMouse = point
+        if life.completeFocus(at: now) { announce("Focus finished. Nice work!",for: 6); play(4,duration: 1.5); playSound(purr: false) }
+        if walk.due(at: now,enabled: walkReminders) { remindWalk() }
+        let sleeping = life.sleeping(at: now,autoSleep: autoSleep && !musicMode && !audioActive)
+        if life.breakDue(at: now,enabled: breakReminders,sleeping: sleeping) { stretch() }
+        if let end = life.focusEnd {
+            let seconds = max(0,Int(ceil(end-now)))
+            focusItem.title = String(format: "Focus %02d:%02d — click to cancel",seconds/60,seconds%60)
+        } else { focusItem.title = "Start 25-minute focus" }
+        if now > treatExpires { treatPanel?.orderOut(nil) }
+        if let trip = excursion {
+            if now >= trip.start+trip.duration {
+                panel.setFrameOrigin(trip.origin); excursion = nil
+                if trip.kind == .treat { treatPanel?.orderOut(nil); announce("Nom. Acceptable.",for: 2.5); play(0,duration: 1); playSound(purr: true) }
+                else { announce("I meant to miss.",for: 2.5); play(5,duration: 1.2) }
+            } else {
+                panel.setFrameOrigin(trip.position(at: now))
+                if trip.kind == .treat && now-trip.start > trip.duration*0.45 { treatPanel?.orderOut(nil) }
+            }
+        }
+        if mischief && !sleeping && life.focusEnd == nil && !typing.active(at: now) && excursion == nil && now > actionUntil && now > pettingUntil && now-lastChase > 75 && distance > 1 && NSEvent.pressedMouseButtons == 0 {
+            let range = hypot(point.x-panel.frame.midX,point.y-panel.frame.midY)
+            if range > 65 && range < 240 { startChase() }
+        }
+        pet.typingPhase = nil
+        pet.snoozing = false; pet.happy = false; pet.stretching = false; pet.clock = now
+        pet.home = home
+        pet.headphones = musicMode || audioActive
+        let goal = home == .box && (sleeping || now < pettingUntil) ? 1.0 : 0.0
+        pet.homeDepth += (goal-pet.homeDepth)*0.12
+        pet.caption = now < noticeUntil ? notice : nil
+        var row = 0, col = Int(now / 0.2) % 6
+        if let trip = excursion {
+            if trip.kind == .treat { row = 4; col = min(4,Int((now-trip.start)/trip.duration*5)) }
+            else { row = trip.target.x < trip.origin.x ? 2 : 1; if now-trip.start > trip.duration*0.6 { row = row == 1 ? 2 : 1 }; col = Int(now/0.1)%8 }
+        } else if now < pettingUntil {
+            row = 0; col = 1; pet.happy = true
+        } else if now < stretchUntil {
+            row = 7; col = 3; pet.stretching = true
+        } else if now < actionUntil {
+            row = actionRow; col = Int((now - actionStart) / 0.14) % counts[row]
+        } else if typing.active(at: now) {
+            row = 10; col = 0
+            let cadence = typing.cadence(at: now)
+            pet.typingPhase = Int(now / cadence)
+            if cadence < 0.1 { pet.caption = "Turbo paws" }
+        } else if sleeping {
+            row = 0; col = 1; pet.snoozing = true
+            if let end = life.focusEnd { pet.caption = "Focus · \(max(0,Int(ceil((end-now)/60)))) min" }
+        } else if !paused {
+            // AppKit mouse and window coordinates both use a bottom-left origin,
+            // including negative coordinates on secondary displays.
+            let point = NSEvent.mouseLocation
+            let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + panel.frame.height * 0.68)
+            if let d = direction(point.x - face.x, point.y - face.y) { row = 9 + d / 8; col = d % 8 }
+        }
+        if now < walkUntil { pet.caption = "Stand up & take a short walk" }
+        pet.sprite = images["\(row)-\(col)"]
+    }
+    func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
+    func announce(_ text: String, for duration: Double = 3) { notice = text; noticeUntil = ProcessInfo.processInfo.systemUptime+duration }
+    func beginDrag() {
+        excursion = nil; life.activity(at: ProcessInfo.processInfo.systemUptime)
+        pettingUntil = 0; stretchUntil = 0
+    }
+    @objc func petNow() {
+        let now = ProcessInfo.processInfo.systemUptime
+        pettingUntil = now+2.2; life.activity(at: now)
+        if now-lastPetSound > 3 { lastPetSound = now; playSound(purr: true) }
+    }
+    @objc func nap() { life.forcedNap = true; actionUntil = 0; pettingUntil = 0; stretchUntil = 0; typing.until = 0; announce("Nap time",for: 2) }
+    @objc func stretch() {
+        let now = ProcessInfo.processInfo.systemUptime
+        stretchUntil = now+3; life.nextBreak = now+life.breakInterval
+        announce("Time for a little stretch",for: 5)
+    }
+    func startTimer(_ seconds: Double) {
+        beginDrag(); life.focusEnd = ProcessInfo.processInfo.systemUptime+seconds
+        actionUntil = 0; typing.until = 0; treatPanel?.orderOut(nil)
+        announce("Focus together",for: 2)
+    }
+    @objc func startFocus() { if life.focusEnd != nil { cancelFocus() } else { startTimer(25*60) } }
+    @objc func shortFocus() { startTimer(5*60) }
+    @objc func testFocus() { startTimer(10) }
+    @objc func cancelFocus() { life.focusEnd = nil; life.activity(at: ProcessInfo.processInfo.systemUptime); announce("Focus cancelled") }
+    @objc func remindWalk() {
+        walkUntil = ProcessInfo.processInfo.systemUptime + 30
+        play(3,duration: 3); playSound(purr: false)
+    }
+    @objc func toggleWalk() {
+        walkReminders.toggle(); walk.next = ProcessInfo.processInfo.systemUptime + 1200
+        if !walkReminders { walkUntil = 0 }
+        UserDefaults.standard.set(walkReminders,forKey: "walkReminders"); syncOptions()
+    }
+    @objc func toggleSleep() { autoSleep.toggle(); UserDefaults.standard.set(autoSleep,forKey: "autoSleep"); syncOptions() }
+    @objc func toggleMischief() { mischief.toggle(); UserDefaults.standard.set(mischief,forKey: "mischief"); syncOptions() }
+    @objc func toggleBreaks() { breakReminders.toggle(); life.nextBreak = ProcessInfo.processInfo.systemUptime+life.breakInterval; UserDefaults.standard.set(breakReminders,forKey: "breakReminders"); syncOptions() }
+    @objc func toggleSounds() { sounds.toggle(); UserDefaults.standard.set(sounds,forKey: "sounds"); if !sounds { sound?.stop() }; syncOptions() }
+    @objc func selectHome(_ sender: NSMenuItem) {
+        home = PetHome(rawValue: sender.representedObject as? String ?? "none") ?? .none
+        UserDefaults.standard.set(home.rawValue,forKey: "home"); syncOptions()
+        if home == .box { petNow(); announce("My box now.",for: 2) }
+    }
+    @objc func toggleMusic() { musicMode.toggle(); syncOptions() }
+    @objc func toggleAudio() { autoAudio.toggle(); UserDefaults.standard.set(autoAudio,forKey: "autoAudio"); audioCheck = 0; if !autoAudio { audioActive = false }; syncOptions() }
+    func outputActive() -> Bool {
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,mScope: kAudioObjectPropertyScopeGlobal,mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),&address,0,nil,&size,&device) == noErr, device != 0 else { return false }
+        var running: UInt32 = 0; size = UInt32(MemoryLayout<UInt32>.size)
+        address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,mScope: kAudioObjectPropertyScopeGlobal,mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectGetPropertyData(device,&address,0,nil,&size,&running) == noErr && running != 0
+    }
+    func syncOptions() {
+        walkItem?.state = walkReminders ? .on : .off
+        musicItem?.state = musicMode ? .on : .off; audioItem?.state = autoAudio ? .on : .off
+        sleepItem?.state = autoSleep ? .on : .off; mischiefItem?.state = mischief ? .on : .off
+        breakItem?.state = breakReminders ? .on : .off; soundItem?.state = sounds ? .on : .off
+        for (style,item) in homeItems { item.state = style == home ? .on : .off }
+    }
+    func clampedOrigin(_ point: NSPoint) -> NSPoint {
+        let screen = NSScreen.screens.first { $0.frame.contains(panel.frame.center) } ?? NSScreen.main
+        guard let f = screen?.visibleFrame else { return point }
+        return NSPoint(x: min(max(point.x,f.minX),f.maxX-panel.frame.width), y: min(max(point.y,f.minY),f.maxY-panel.frame.height))
+    }
+    @objc func playCursor() { startChase() }
+    func startChase() {
+        guard excursion == nil else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        life.activity(at: now); lastChase = now
+        let cursor = NSEvent.mouseLocation
+        let dx = cursor.x-panel.frame.midX, dy = cursor.y-panel.frame.midY
+        let distance = max(1,hypot(dx,dy)), amount = min(70,distance*0.5)
+        let target = clampedOrigin(NSPoint(x: panel.frame.minX+dx/distance*amount,y: panel.frame.minY+dy/distance*amount))
+        excursion = Excursion(kind: .chase,origin: panel.frame.origin,target: target,start: now,duration: 1.7)
+    }
+    @objc func giveTreat() {
+        if treatPanel == nil {
+            let window = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 42,height: 38),styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
+            window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false; window.level = .floating
+            window.hidesOnDeactivate = false; window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]
+            let view = TreatView(frame: NSRect(x: 0,y: 0,width: 42,height: 38)); view.owner = self; window.contentView = view
+            window.isReleasedWhenClosed = false; treatPanel = window
+        }
+        guard let window = treatPanel else { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(panel.frame.center) } ?? NSScreen.main
+        let f = screen?.visibleFrame ?? panel.frame
+        let x = panel.frame.minX-52 >= f.minX ? panel.frame.minX-52 : min(f.maxX-42,panel.frame.maxX+10)
+        window.setFrameOrigin(NSPoint(x: x,y: max(f.minY,panel.frame.minY+10)))
+        window.orderFrontRegardless(); treatExpires = ProcessInfo.processInfo.systemUptime+20
+        announce("Click the fish",for: 3)
+    }
+    func eatTreat() {
+        guard let treat = treatPanel, excursion == nil else { return }
+        beginDrag(); let now = ProcessInfo.processInfo.systemUptime
+        let target = clampedOrigin(NSPoint(x: treat.frame.midX-panel.frame.width/2,y: panel.frame.minY))
+        excursion = Excursion(kind: .treat,origin: panel.frame.origin,target: target,start: now,duration: 1.5)
+        treatExpires = now+2
+    }
+    func playSound(purr: Bool) {
+        guard sounds else { return }
+        let rate = 22050, length = Int(Double(rate)*(purr ? 0.8 : 0.35))
+        var pcm = Data()
+        for i in 0..<length {
+            let t = Double(i)/Double(rate), fade = sin(.pi*Double(i)/Double(length))
+            let base = purr ? (sin(2 * .pi * 95*t)+0.25*sin(2 * .pi * 190*t))*(0.55+0.45*sin(2 * .pi * 25*t)) : sin(2 * .pi * 660*t)
+            var value = Int16(base*fade*2400).littleEndian
+            withUnsafeBytes(of: &value) { pcm.append(contentsOf: $0) }
+        }
+        var data = Data()
+        func text(_ s: String) { data.append(s.data(using: .ascii)!) }
+        func number<T: FixedWidthInteger>(_ n: T) { var le = n.littleEndian; withUnsafeBytes(of: &le) { data.append(contentsOf: $0) } }
+        text("RIFF"); number(UInt32(pcm.count+36)); text("WAVEfmt "); number(UInt32(16)); number(UInt16(1)); number(UInt16(1)); number(UInt32(rate)); number(UInt32(rate*2)); number(UInt16(2)); number(UInt16(16)); text("data"); number(UInt32(pcm.count)); data.append(pcm)
+        sound?.stop(); sound = NSSound(data: data); sound?.volume = 0.35; sound?.play()
+    }
+    func removeKeyMonitors() {
+        if let monitor = globalKeys { NSEvent.removeMonitor(monitor) }; globalKeys = nil
+        if let monitor = localKeys { NSEvent.removeMonitor(monitor) }; localKeys = nil
+    }
+    func refreshTypingMonitor() {
+        let allowed = AXIsProcessTrusted()
+        syncOptions()
+        typingItem?.state = typingEnabled ? .on : .off
+        permissionItem?.isHidden = allowed || !typingEnabled
+        typingStatus?.title = !typingEnabled ? "Typing detection: off" : !allowed ? "Typing detection: permission needed" : lastKeyActivity > 0 ? "Typing detection: receiving keys" : "Typing detection: waiting for keys"
+        guard typingEnabled && allowed else { removeKeyMonitors(); return }
+        if globalKeys == nil {
+            globalKeys = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
+                let now = ProcessInfo.processInfo.systemUptime
+                self?.receiveTyping(at: now)
+            }
+        }
+        if localKeys == nil {
+            localKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                let now = ProcessInfo.processInfo.systemUptime
+                self?.receiveTyping(at: now)
+                return event
+            }
+        }
+    }
+    func receiveTyping(at now: Double) {
+        typing.pulse(at: now); life.activity(at: now); lastKeyActivity = now
+        actionUntil = 0; pettingUntil = 0; stretchUntil = 0
+    }
+    @objc func openTypingSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+    @objc func requestTypingAccess() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        refreshTypingMonitor()
+    }
+    @objc func toggleTyping() {
+        typingEnabled.toggle(); UserDefaults.standard.set(typingEnabled, forKey: "typingEnabled")
+        if typingEnabled { requestTypingAccess() } else { typing.until = 0; removeKeyMonitors() }
+        refreshTypingMonitor()
+    }
+    @objc func previewTyping() { let now = ProcessInfo.processInfo.systemUptime; receiveTyping(at: now); typing.until = now + 3; lastKeyActivity = 0 }
+    @objc func resetPosition() {
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+        panel.setFrameOrigin(NSPoint(x: frame.maxX - panel.frame.width - 24, y: frame.minY + 24)); savePosition()
+    }
+    @objc func screenChanged() {
+        if !NSScreen.screens.contains(where: { $0.visibleFrame.contains(panel.frame) }) { resetPosition() }
+    }
+    func resize(_ width: Double) {
+        panel.setContentSize(NSSize(width: width, height: width * 208 / 192)); screenChanged()
+    }
+    @objc func small() { resize(115) }
+    @objc func large() { resize(192) }
+    @objc func wave() { play(3, duration: 1.0) }
+    @objc func jump() { play(4, duration: 0.85) }
+    @objc func think() { play(7, duration: 2.0) }
+    @objc func togglePause() { paused.toggle(); pauseItem.title = paused ? "Resume cursor following" : "Pause cursor following" }
+    @objc func quit() { NSApp.terminate(nil) }
+    func applicationWillTerminate(_ notification: Notification) {
+        timer?.invalidate(); removeKeyMonitors(); sound?.stop()
+        if let trip = excursion { panel.setFrameOrigin(trip.origin) }
+        savePosition()
+    }
+}
+
+extension NSRect { var center: NSPoint { NSPoint(x: midX,y: midY) } }
+
+if CommandLine.arguments.contains("--self-test") {
+    let cases: [(Double, Double, Int)] = [(0,100,0),(100,0,4),(0,-100,8),(-100,0,12),(100,100,2),(100,-100,6),(-100,-100,10),(-100,100,14)]
+    for (x,y,want) in cases { precondition(direction(x,y) == want) }
+    for i in 0..<16 {
+        let a = Double(i) * 22.5 * .pi / 180
+        precondition(direction(sin(a)*100,cos(a)*100) == i)
+    }
+    precondition(direction(0,0) == nil)
+    var activity = TypingActivity()
+    precondition(!activity.active(at: 10))
+    activity.pulse(at: 10)
+    precondition(activity.active(at: 10.5))
+    activity.pulse(at: 10.6)
+    precondition(activity.active(at: 11.2))
+    precondition(!activity.active(at: 11.4))
+    guard let resources = Bundle.main.resourceURL else { fatalError("Missing bundle resources") }
+    for (r,n) in [6,8,8,4,5,8,6,6,6,8,8].enumerated() {
+        for c in 0..<n { precondition(NSImage(contentsOf: resources.appendingPathComponent("frames/\(r)-\(c).png")) != nil) }
+    }
+    var reminder = WalkReminder(next: 1200)
+    precondition(!reminder.due(at: 1199,enabled: true))
+    precondition(!reminder.due(at: 1200,enabled: false))
+    precondition(reminder.due(at: 1200,enabled: true))
+    precondition(!reminder.due(at: 1201,enabled: true))
+    precondition(reminder.due(at: 2400,enabled: true))
+    precondition(reminder.due(at: 10000,enabled: true) && reminder.next == 11200)
+    var life = LifeState(lastActivity: 10, nextBreak: 1800)
+    precondition(!life.sleeping(at: 189,autoSleep: true))
+    precondition(life.sleeping(at: 190,autoSleep: true))
+    life.activity(at: 191); precondition(!life.sleeping(at: 191,autoSleep: true))
+    life.focusEnd = 200; precondition(life.sleeping(at: 195,autoSleep: false))
+    precondition(!life.completeFocus(at: 199)); precondition(life.completeFocus(at: 200)); precondition(!life.completeFocus(at: 201))
+    precondition(!life.breakDue(at: 201,enabled: true,sleeping: false))
+    precondition(life.breakDue(at: 2000,enabled: true,sleeping: false))
+    let trip = Excursion(kind: .chase,origin: .zero,target: NSPoint(x: 100,y: 50),start: 10,duration: 2)
+    precondition(trip.position(at: 10) == .zero && trip.position(at: 12) == .zero)
+    precondition(trip.position(at: 11) == trip.target)
+    for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
+    precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
+    print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let canvas = NSImage(size: NSSize(width: 768,height: 208))
+    canvas.lockFocus()
+    NSColor(calibratedWhite: 0.9,alpha: 1).setFill(); NSRect(x: 0,y: 0,width: 768,height: 208).fill()
+    for i in 0..<4 {
+        let view = PetView(frame: NSRect(x: 0,y: 0,width: 192,height: 208))
+        view.sprite = NSImage(contentsOf: Bundle.main.resourceURL!.appendingPathComponent("frames/0-1.png"))
+        view.clock = 1; view.home = i == 2 ? .box : .cushion
+        view.headphones = i == 0 || i == 1; view.typingPhase = i == 1 ? 1 : nil
+        view.snoozing = i == 2; view.happy = i == 3
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform(); transform.translateX(by: Double(i)*192,yBy: 0); transform.concat()
+        view.draw(view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+    canvas.unlockFocus()
+    let rep = NSBitmapImageRep(data: canvas.tiffRepresentation!)!
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
+} else {
+    let app = NSApplication.shared
+    let delegate = Companion()
+    app.setActivationPolicy(.accessory)
+    app.delegate = delegate
+    app.run()
+}
