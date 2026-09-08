@@ -159,3 +159,9 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_claude_bridge.py
 ```
 
 The test requires a macOS environment allowing pseudo-terminals and local sockets. It covers output transport, sending input, Escape, invalid controls, and cleanup. Live authenticated Claude behavior still depends on the installed CLI and terminal prompt state.
+
+## Personal assistant — stage 1
+
+Click the cat, or right-click → Open personal assistant. Type `status` / `What needs me?`, `agents`, `focus`, `walk`, or `help`. Status summarizes recent terminal events from this app session, which may already be resolved. It does not infer unresolved work. Select a connected Claude session and click Open Claude for live output and input controls. The session picker updates as connections appear/disappear.
+
+This first stage is a local command interface, not a general language model. Unknown requests are not executed. No additional provider/network calls are made by the chat panel. Chat history is bounded and held in memory; Clear chat removes it. Click now opens the assistant; Wave remains in the pet menu. See docs/assistant-roadmap.md for planned, unimplemented stages.

@@ -220,7 +220,8 @@ final class PetView: NSView {
     }
     override func mouseUp(with event: NSEvent) {
         if moved { owner?.screenChanged(); owner?.savePosition() }
-        else { owner?.play(event.clickCount > 1 ? 4 : 3, duration: 0.9) }
+        else if event.clickCount > 1 { owner?.play(4, duration: 0.9) }
+        else { owner?.openAssistant() }
     }
     override func rightMouseDown(with event: NSEvent) {
         if let menu = owner?.menu { NSMenu.popUpContextMenu(menu, with: event, for: self) }
@@ -237,6 +238,84 @@ final class TreatView: NSView {
         NSColor.black.setFill(); NSBezierPath(ovalIn: NSRect(x: 29,y: 20,width: 3,height: 3)).fill()
     }
     override func mouseDown(with event: NSEvent) { owner?.eatTreat() }
+}
+
+enum AssistantCommand: Equatable {
+    case status, agents, focus, walk, help, unknown
+    static func parse(_ text: String) -> AssistantCommand {
+        let value = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "?!."))
+        switch value {
+        case "status", "what needs me", "what needs my attention", "what is happening": return .status
+        case "agents", "show agents", "show my running agents": return .agents
+        case "focus", "start focus", "start a focus timer": return .focus
+        case "walk", "remind me to walk", "walk reminder": return .walk
+        case "help", "what can you do": return .help
+        default: return .unknown
+        }
+    }
+}
+final class AssistantChat: NSObject {
+    let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 540,height: 460),styleMask: [.titled,.closable,.resizable],backing: .buffered,defer: false)
+    let history = NSTextView()
+    let input = NSTextField()
+    let sessions = NSPopUpButton()
+    var sessionIDs: [String] = []
+    weak var owner: Companion?
+    init(owner: Companion) {
+        self.owner = owner; super.init()
+        window.title = "Bagad Billa · Personal assistant"; window.isReleasedWhenClosed = false
+        let root = window.contentView!
+        let note = NSTextField(labelWithString: "Local commands · connected sessions only · no general AI chat yet")
+        note.frame = NSRect(x: 14,y: 430,width: 510,height: 20); note.font = .systemFont(ofSize: 11); note.autoresizingMask = [.width,.minYMargin]; root.addSubview(note)
+        let scroll = NSScrollView(frame: NSRect(x: 14,y: 135,width: 512,height: 285)); scroll.autoresizingMask = [.width,.height]; scroll.hasVerticalScroller = true
+        history.isEditable = false; history.isSelectable = true; history.font = .systemFont(ofSize: 13); history.autoresizingMask = [.width]; history.textContainer?.widthTracksTextView = true
+        scroll.documentView = history; root.addSubview(scroll)
+        input.frame = NSRect(x: 14,y: 92,width: 420,height: 30); input.autoresizingMask = [.width]; input.placeholderString = "What needs my attention?"; input.target = self; input.action = #selector(submit); root.addSubview(input)
+        button("Send",#selector(submit),442,92,84,root)
+        sessions.frame = NSRect(x: 14,y: 52,width: 350,height: 28); sessions.autoresizingMask = [.width]; root.addSubview(sessions)
+        button("Open Claude",#selector(openSession),374,52,152,root)
+        button("What needs me?",#selector(status),14,12,160,root)
+        button("Start focus",#selector(focus),184,12,130,root)
+        button("Clear chat",#selector(clear),324,12,120,root)
+        append("Bagad Billa", "I can summarize recent terminal alerts, list detected agents, open connected Claude controls, and start your 25-minute focus timer. Type help for commands. Activity may be unknown for unconnected agents.")
+        window.center()
+    }
+    func button(_ title: String,_ action: Selector,_ x: Double,_ y: Double,_ width: Double,_ root: NSView) {
+        let b = NSButton(title: title,target: self,action: action); b.bezelStyle = .rounded; b.frame = NSRect(x: x,y: y,width: width,height: 28); root.addSubview(b)
+    }
+    func append(_ role: String,_ text: String) {
+        history.string += "\(role): \(text)\n\n"
+        if history.string.count > 24000 { history.string = String(history.string.suffix(20000)) }
+        history.scrollToEndOfDocument(nil)
+    }
+    func refreshSessions() {
+        let selected = sessions.indexOfSelectedItem
+        let selectedID = selected >= 0 && selected < sessionIDs.count ? sessionIDs[selected] : nil
+        let live = (owner?.claudeSessions.values.sorted { $0.project < $1.project }) ?? []
+        sessionIDs = live.map { $0.id }; sessions.removeAllItems()
+        sessions.addItems(withTitles: live.isEmpty ? ["No connected Claude terminals"] : live.map { "\($0.project) · PID \($0.pid)" })
+        sessions.isEnabled = !live.isEmpty
+        if let id = selectedID, let index = sessionIDs.firstIndex(of: id) { sessions.selectItem(at: index) }
+    }
+    func show() { refreshSessions(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(input) }
+    @objc func submit() {
+        let text = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        input.stringValue = ""; append("You",String(text.prefix(2000)))
+        append("Bagad Billa",owner?.assistantReply(text) ?? "The companion is unavailable."); refreshSessions()
+    }
+    @objc func status() { input.stringValue = "What needs me?"; submit() }
+    @objc func focus() { input.stringValue = "Start focus"; submit() }
+    @objc func clear() { history.string = "" }
+    @objc func openSession() {
+        let index = sessions.indexOfSelectedItem
+        guard index >= 0,index < sessionIDs.count,let owner = owner,
+              let snapshot = owner.claudeSessions.values.first(where: { $0.id == sessionIDs[index] }),Date().timeIntervalSince1970-snapshot.updated < 5 else {
+            append("Bagad Billa","That session is no longer connected. Run bagad-claude in a project terminal."); refreshSessions(); return
+        }
+        let control = owner.claudeControls[snapshot.id] ?? ClaudeControl(snapshot)
+        owner.claudeControls[snapshot.id] = control; control.show()
+    }
 }
 
 struct ClaudeSnapshot: Decodable {
@@ -411,6 +490,7 @@ final class Companion: NSObject, NSApplicationDelegate {
     var terminalMessage: String?
     var terminalItem: NSMenuItem!
     var terminalHistory = NSMenu(title: "Terminal activity")
+    var assistantChat: AssistantChat?
     var claudeSessions: [String: ClaudeSnapshot] = [:]
     var claudeControls: [String: ClaudeControl] = [:]
     var processAgentLines: [String] = []
@@ -477,6 +557,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         if typingEnabled { requestTypingAccess() }
     }
     func buildMenu() {
+        add("Open personal assistant", #selector(openAssistant))
         agentItem = add("Show running agents above cat", #selector(toggleAgents))
         terminalItem = add("Terminal notifications", #selector(toggleTerminal))
         let history = NSMenuItem(title: "Recent terminal activity",action: nil,keyEquivalent: "")
@@ -665,6 +746,26 @@ final class Companion: NSObject, NSApplicationDelegate {
             }
         }
     }
+    @objc func openAssistant() {
+        if assistantChat == nil { assistantChat = AssistantChat(owner: self) }
+        assistantChat?.show()
+    }
+    func assistantReply(_ text: String) -> String {
+        switch AssistantCommand.parse(text) {
+        case .status:
+            let events = terminalHistory.items.prefix(6).map { "• " + $0.title }
+            return "Source: local terminal events from this app session. These are recent reports, not confirmed unresolved tasks.\n" + (events.isEmpty ? "No terminal alerts received yet." : events.joined(separator: "\n")) + "\nConnected Claude terminals: \(claudeSessions.count). Select one below to inspect its live output."
+        case .agents: return "Source: local process scan and explicit Claude connections.\n" + agentLines.joined(separator: "\n") + "\nA running process does not prove the agent is busy."
+        case .focus:
+            if life.focusEnd != nil { return "A focus timer is already running. Use the pet menu to cancel it." }
+            startTimer(1500); return "Started a 25-minute focus timer. I’ll celebrate when it ends."
+        case .walk:
+            walkReminders = true; walk.next = ProcessInfo.processInfo.systemUptime+1200; UserDefaults.standard.set(true,forKey: "walkReminders"); syncOptions()
+            return "Walk reminders are enabled. The next reminder is in 20 minutes while I’m running."
+        case .help: return "Commands: status / what needs me?, agents, focus, walk, help. Choose a connected Claude terminal below and click Open Claude to send instructions or interrupt. This local panel does not execute shell commands or answer general questions. Chat stays in memory; Clear chat removes it."
+        case .unknown: return "I don’t recognize that command yet. Try status, agents, focus, walk, or help. For coding instructions, select a connected Claude session below and open its controls."
+        }
+    }
     func readClaudeSessions() {
         let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BagadBilli/claude")
         claudeSessions = [:]
@@ -680,6 +781,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         let remaining = processAgentLines.filter { !controlledPIDs.contains($0.components(separatedBy: "PID ").last ?? "") }
         let rows = claudeSessions.keys.sorted()+remaining
         agentLines = ["Agents · \(rows.count)"] + (rows.isEmpty ? ["No supported CLI agents found"] : rows)
+        assistantChat?.refreshSessions()
         updateAgentPanel()
     }
     func updateAgentPanel() {
@@ -898,6 +1000,9 @@ final class Companion: NSObject, NSApplicationDelegate {
 extension NSRect { var center: NSPoint { NSPoint(x: midX,y: midY) } }
 
 if CommandLine.arguments.contains("--self-test") {
+    precondition(AssistantCommand.parse("What needs my attention?") == .status)
+    precondition(AssistantCommand.parse("start focus") == .focus)
+    precondition(AssistantCommand.parse("run rm -rf anything") == .unknown)
     let terminal = TerminalEvent(kind: "failure",code: 1,duration: 4,time: 1,session: "ttys001",app: "vscode")
     precondition(terminal.valid && terminal.message == "ttys001: failed (1)")
     precondition(!TerminalEvent(kind: "execute",code: 0,duration: 0,time: 1,session: "terminal",app: "unknown").valid)
@@ -941,6 +1046,14 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+ } else if let index = CommandLine.arguments.firstIndex(of: "--render-assistant"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let owner = Companion()
+    let chat = AssistantChat(owner: owner); chat.refreshSessions()
+    let view = chat.window.contentView!
+    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds,to: rep)
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
  } else if let index = CommandLine.arguments.firstIndex(of: "--render-control"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let control = ClaudeControl(ClaudeSnapshot(id: String(repeating: "a",count: 32),pid: 123,project: "Demo project",updated: Date().timeIntervalSince1970,state: "Connected",output: "Claude terminal preview\n\nReading project files…\nWaiting for your next instruction."))
