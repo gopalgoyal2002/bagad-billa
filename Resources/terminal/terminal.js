@@ -9,3 +9,10 @@ window.copySelection = () => term.getSelection();
 window.pasteText = text => term.paste(text);
 new ResizeObserver(()=>fit.fit()).observe(document.getElementById('terminal'));
 fit.fit(); post({kind:'ready',cols:term.cols,rows:term.rows}); term.focus();
+
+window.voiceSnapshot = () => {
+  const buffer = term.buffer.active;
+  const lines = [];
+  for (let i = Math.max(0, buffer.length - 60); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) || '');
+  return lines.join('\n').slice(-4000);
+};
