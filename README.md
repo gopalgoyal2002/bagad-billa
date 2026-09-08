@@ -160,18 +160,20 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_claude_bridge.py
 
 The test requires a macOS environment allowing pseudo-terminals and local sockets. It covers output transport, sending input, Escape, invalid controls, and cleanup. Live authenticated Claude behavior still depends on the installed CLI and terminal prompt state.
 
-## Personal assistant — stage 1
+## Terminals above the pet
 
-Click the cat, or right-click → Open personal assistant. Type `status` / `What needs me?`, `agents`, `focus`, `walk`, or `help`. Status summarizes recent terminal events from this app session, which may already be resolved. It does not infer unresolved work. Select a connected Claude session and click Open Claude for live output and input controls. The session picker updates as connections appear/disappear.
+The personal-assistant/AI chat was removed. Click the cat, or use **Open terminals** in its menu, to open a real terminal window above it.
 
-This first stage is a local command interface, not a general language model. Unknown requests are not executed. No additional provider/network calls are made by the chat panel. Chat history is bounded and held in memory; Clear chat removes it. Click now opens the assistant; Wave remains in the pet menu. See docs/assistant-roadmap.md for planned, unimplemented stages.
+- Type `claude` normally, just as in another terminal. No special launcher is needed for using Claude here.
+- **+ Terminal** starts another independent zsh session in your home folder.
+- **+ In folder…** lets you choose the working directory for a new tab.
+- Drag a window edge to resize, or click **Expand** to zoom. Shell rows/columns update with the view.
+- Use the tabs to switch between sessions. **Copy** copies selected terminal text; **Paste** uses the terminal's paste handling.
+- Closing the terminal window hides it and keeps sessions running. Click the cat to reopen it.
+- **End tab** asks before closing its shell. Quitting the pet closes all of its terminal sessions. Commands may be interrupted; save your work first.
 
-## General AI chat — stage 2
+This is an interactive zsh terminal, not an AI command interpreter. Commands you type have your normal account access and run immediately, just like a normal terminal. The app neither auto-approves Claude prompts nor supplies commands on your behalf. Your ordinary shell startup files and history settings apply. Embedded terminal scrollback stays in memory (3,000 lines); it is not added to a separate pet transcript. Existing optional bagad-claude launcher sessions still work separately.
 
-Unrecognized local commands now go to Claude using the installed `~/.local/bin/claude` login. The banner makes this explicit. Local `status`, `agents`, `focus`, `walk`, and `help` still run locally. Claude's normal usage limits apply.
+Rendering uses locally bundled xterm.js 5.5.0 and addon-fit 0.10.0, with their MIT licenses in Resources/terminal. No CDN or local network server is used. A Python helper owns each pseudo-terminal over private process pipes. The web view is limited to its bundled page, blocks network content, and receives output as bytes rather than HTML. Python and WebKit are needed at runtime, in addition to the macOS requirements above.
 
-Attach files opens a file picker: UTF-8 text only, up to 24 KB each and 48 KB total. Filenames and byte count are visible; attachment content is captured at selection time. Each AI request sends the message, the last four AI exchanges (bounded answer length), and the selected file content. No terminal snapshots, directories, or other context are added automatically. Remove files prevents resending the attachments; prior AI replies may still reflect their contents until Clear chat. Clear chat stops a request and clears conversation memory, but attachments stay visible until Remove files.
-
-AI runs in an isolated temporary working directory using Claude safe mode, no tools, no MCP servers, a dedicated system prompt, and no session persistence. It cannot execute commands or edit files. This relies on the installed Claude CLI supporting those flags; errors are shown rather than retrying with weaker settings. Claude retains its own service-side data policies and account behavior. Stop AI terminates the local request; it does not guarantee remote usage was not incurred. Requests time out after two minutes. Responses appear when complete.
-
-Validation includes a live minimal Claude request with no attached files (returned OK), native build/self-tests, and a rendered assistant layout. Memory, voice, external accounts, and approved action execution remain later stages.
+Tests: `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_terminal_host.py` verifies shell execution, resize, Ctrl-C, tab isolation, and shutdown using harmless commands. A logged-in GUI session can run `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --terminal-smoke "$PWD/build/terminal-preview.png"` to verify real shell output reaches the embedded renderer. These tests require PTY access.
