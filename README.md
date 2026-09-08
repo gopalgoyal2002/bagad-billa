@@ -133,3 +133,29 @@ A panel above the cat lists recognized coding-agent executable processes owned b
 “Running” means the process exists, not that an agent is actively reasoning. IDE extensions, subprocess agents inside another process, remote agents, and CLI tools whose executable appears only as node/python are not discoverable with this method. No command arguments or conversation text are inspected. This is a supported-process list, not a complete inventory of every agent in every application.
 
 The Agent Desk displays up to three process cards per page. Click the header to collapse/expand; click the left/right half of the footer to change pages. Failure/help terminal events expand the desk and highlight its latest-alert footer. Terminal alerts are not attributed to individual agents without a verified mapping. Cards explicitly show activity unknown; task descriptions, true busy/idle state, elapsed task time, and exact terminal navigation are not available from process discovery.
+
+## Claude Code live control (opt-in terminal launcher)
+
+Run this from an interactive terminal in the project you want Claude to work in:
+
+```bash
+/absolute/path/to/bagad-billa/integrations/claude/bagad-claude
+```
+
+It requires the existing Claude Code CLI, its normal login, and `/usr/bin/python3`. Extra CLI arguments are forwarded, for example `bagad-claude --resume` to use Claude's session picker. Exit the old session before resuming it; this launcher cannot attach to a terminal already running outside it.
+
+A **Live Claude** card appears above the pet. Click it to open a window with recent terminal output, an input field, **Send**, and **Interrupt (Esc)**. Send forwards your input through bracketed paste and Enter. Interrupt sends Escape, Claude's interactive cancel key; it is not a force-kill and its effect depends on Claude's current UI state. Answer permission prompts deliberately using the connected terminal or the input box; the integration does not automatically approve tools. Multi-choice interfaces requiring arrow keys remain available in the original terminal.
+
+Your original terminal stays interactive. The launcher owns only that Claude pseudo-terminal; it does not type into other terminals. Start additional launcher instances for separate project cards. Closing the control window leaves the terminal session running. Exiting the Claude process or closing its launcher removes the connection. No agent is started simply by launching the pet.
+
+**Live-output privacy:** unlike the metadata-only zsh integration, this explicitly connected mode reads Claude's terminal output and stores a rolling snapshot (up to 8,000 sanitized characters) in private local files under `~/Library/Application Support/BagadBilli/claude`. Output may contain project content or secrets Claude prints. Snapshots are deleted on normal shutdown; a crash can leave a stale snapshot, which the pet ignores after five seconds. User messages travel through a private local socket to Claude and may then be sent to Claude's service under its normal settings. The launcher does not add telemetry or bypass Claude permission checks. It displays recent output, not hidden reasoning or a structured understanding of task status.
+
+Control is scoped to launcher-created sessions. Ordinary detected processes remain view-only. Input fields target the selected connection, identified by project and PID. The app does not provide automatic takeover of existing sessions.
+
+Bridge test (fake Claude executable, no model/API request):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_claude_bridge.py
+```
+
+The test requires a macOS environment allowing pseudo-terminals and local sockets. It covers output transport, sending input, Escape, invalid controls, and cleanup. Live authenticated Claude behavior still depends on the installed CLI and terminal prompt state.

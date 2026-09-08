@@ -239,6 +239,66 @@ final class TreatView: NSView {
     override func mouseDown(with event: NSEvent) { owner?.eatTreat() }
 }
 
+struct ClaudeSnapshot: Decodable {
+    let id: String
+    let pid: Int
+    let project: String
+    let updated: Double
+    let state: String
+    let output: String
+}
+
+final class ClaudeControl: NSObject {
+    let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 560,height: 440),styleMask: [.titled,.closable,.resizable],backing: .buffered,defer: false)
+    let transcript = NSTextView()
+    let input = NSTextField()
+    let status = NSTextField(labelWithString: "")
+    var session: ClaudeSnapshot
+    init(_ session: ClaudeSnapshot) {
+        self.session = session; super.init()
+        window.title = "Claude · " + session.project; window.isReleasedWhenClosed = false
+        let root = window.contentView!
+        let scroll = NSScrollView(frame: NSRect(x: 12,y: 105,width: 536,height: 320))
+        scroll.autoresizingMask = [.width,.height]; scroll.hasVerticalScroller = true
+        transcript.isEditable = false; transcript.isSelectable = true; transcript.font = .monospacedSystemFont(ofSize: 11,weight: .regular)
+        transcript.autoresizingMask = [.width]; transcript.textContainer?.widthTracksTextView = true
+        scroll.documentView = transcript; root.addSubview(scroll)
+        input.frame = NSRect(x: 12,y: 58,width: 536,height: 30); input.autoresizingMask = [.width]; input.placeholderString = "Message or response to Claude…"; root.addSubview(input)
+        for (title,selector,x) in [("Send",#selector(send),12.0),("Interrupt (Esc)",#selector(interrupt),100.0)] {
+            let button = NSButton(title: title,target: self,action: selector); button.frame = NSRect(x: x,y: 18,width: title == "Send" ? 80 : 135,height: 30); root.addSubview(button)
+        }
+        status.frame = NSRect(x: 245,y: 21,width: 300,height: 22); status.font = .systemFont(ofSize: 10); root.addSubview(status)
+        update(session); window.center()
+    }
+    func update(_ value: ClaudeSnapshot) {
+        session = value
+        if transcript.string != value.output { transcript.string = value.output; transcript.scrollToEndOfDocument(nil) }
+    }
+    func show() { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(input) }
+    @objc func send() { let text = input.stringValue; guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; command("send",text: text) }
+    @objc func interrupt() { command("interrupt",text: "") }
+    func command(_ action: String,text: String) {
+        guard Date().timeIntervalSince1970-session.updated < 5 else { status.stringValue = "Disconnected; reconnect from terminal"; return }
+        guard let script = Bundle.main.resourceURL?.appendingPathComponent("claude-bridge.py") else { return }
+        let id = session.id
+        status.stringValue = "Sending…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let task = Process(); task.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); task.arguments = [script.path,"control"]
+            let pipe = Pipe(); task.standardInput = pipe; task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+            var success = false
+            do {
+                try task.run()
+                let data = try JSONSerialization.data(withJSONObject: ["id":id,"action":action,"text":text])
+                try pipe.fileHandleForWriting.write(contentsOf: data); try pipe.fileHandleForWriting.close(); task.waitUntilExit(); success = task.terminationStatus == 0
+            } catch { }
+            DispatchQueue.main.async {
+                self?.status.stringValue = success ? (action == "send" ? "Sent to Claude terminal" : "Escape sent") : "Not sent — connection unavailable"
+                if success && action == "send" && self?.input.stringValue == text { self?.input.stringValue = "" }
+            }
+        }
+    }
+}
+
 final class AgentListView: NSView {
     var lines: [String] = [] { didSet { needsDisplay = true } }
     var collapsed = false
@@ -246,6 +306,7 @@ final class AgentListView: NSView {
     var activity: String? = nil
     var attention = false
     var changed: (() -> Void)?
+    var select: ((String) -> Void)?
     var rows: [String] { Array(lines.dropFirst()) }
     var pageCount: Int { max(1,(rows.count+2)/3) }
     var cardCount: Int { min(3,max(0,rows.count-page*3)) }
@@ -267,9 +328,10 @@ final class AgentListView: NSView {
             NSColor(calibratedWhite: 0.14,alpha: 1).setFill()
             NSBezierPath(roundedRect: card,xRadius: 9,yRadius: 9).fill()
             label(line.replacingOccurrences(of: "● ",with: ""),20,y+41,11,.white,true)
+            let live = line.hasPrefix("Live Claude")
             let isAgent = line.contains("PID")
-            label(isAgent ? "● Running · activity unknown" : "No live task information",20,y+22,10,isAgent ? .systemTeal : .lightGray)
-            label(isAgent ? "Local process · refreshed every 5s" : "Supported CLI processes only",20,y+6,9,.lightGray)
+            label(live ? "● Connected · click to view and control" : isAgent ? "● Running · activity unknown" : "No live task information",20,y+22,10,isAgent ? .systemTeal : .lightGray)
+            label(live ? "Live terminal output · input · interrupt" : isAgent ? "Local process · refreshed every 5s" : "Supported CLI processes only",20,y+6,9,.lightGray)
         }
         label(activity ?? "No recent terminal alerts",14,25,10,attention ? .systemOrange : .lightGray)
         label("‹   Page \(page+1)/\(pageCount)   ›",14,6,10,.systemTeal)
@@ -278,6 +340,10 @@ final class AgentListView: NSView {
         let p = convert(event.locationInWindow,from: nil)
         if p.y > bounds.height-44 { collapsed.toggle() }
         else if !collapsed && p.y < 24 { page = (page + (p.x < bounds.width/2 ? pageCount-1 : 1)) % pageCount }
+        else if !collapsed {
+            let index = Int((bounds.height-59-p.y)/72)
+            if p.y <= bounds.height-59 && index >= 0 && index < cardCount { select?(rows[page*3+index]) }
+        }
         changed?(); needsDisplay = true
     }
 }
@@ -345,6 +411,9 @@ final class Companion: NSObject, NSApplicationDelegate {
     var terminalMessage: String?
     var terminalItem: NSMenuItem!
     var terminalHistory = NSMenu(title: "Terminal activity")
+    var claudeSessions: [String: ClaudeSnapshot] = [:]
+    var claudeControls: [String: ClaudeControl] = [:]
+    var processAgentLines: [String] = []
     var agentPanel: PetPanel?
     let agentView = AgentListView()
     var agentLines = ["Running agents", "Checking…"]
@@ -456,7 +525,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         let now = ProcessInfo.processInfo.systemUptime
         updateAgentPanel()
         if showAgents && now >= agentCheck && !agentScanning { agentCheck = now+5; scanAgents() }
-        if now >= terminalCheck { terminalCheck = now+1; checkTerminals() }
+        if now >= terminalCheck { terminalCheck = now+1; checkTerminals(); readClaudeSessions() }
         if now >= permissionCheck { permissionCheck = now + 1; refreshTypingMonitor() }
         if now >= audioCheck { audioCheck = now+2; audioActive = autoAudio && outputActive() }
         let point = NSEvent.mouseLocation
@@ -590,10 +659,28 @@ final class Companion: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard let owner = self else { return }
                 owner.agentScanning = false
-                owner.agentLines = ["Running agents · \(result.count)"] + (result.isEmpty ? ["No supported CLI agents found"] : result)
+                owner.processAgentLines = result
+                owner.readClaudeSessions()
                 owner.updateAgentPanel()
             }
         }
+    }
+    func readClaudeSessions() {
+        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BagadBilli/claude")
+        claudeSessions = [:]
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory,includingPropertiesForKeys: [.fileSizeKey,.isSymbolicLinkKey])) ?? []
+        for file in files.prefix(128) where file.pathExtension == "json" {
+            guard let info = try? file.resourceValues(forKeys: [.fileSizeKey,.isSymbolicLinkKey]), info.isSymbolicLink != true, (info.fileSize ?? 999999)>0, (info.fileSize ?? 999999)<64000,
+                  let data = try? Data(contentsOf: file),let item = try? JSONDecoder().decode(ClaudeSnapshot.self,from: data),
+                  item.id.count == 32,item.id.allSatisfy({ $0.isHexDigit }),Date().timeIntervalSince1970-item.updated < 5, item.updated <= Date().timeIntervalSince1970+2 else { continue }
+            let key = "Live Claude · \(item.project.prefix(25)) · \(item.pid)"
+            claudeSessions[key] = item; claudeControls[item.id]?.update(item)
+        }
+        let controlledPIDs = Set(claudeSessions.values.map { String($0.pid) })
+        let remaining = processAgentLines.filter { !controlledPIDs.contains($0.components(separatedBy: "PID ").last ?? "") }
+        let rows = claudeSessions.keys.sorted()+remaining
+        agentLines = ["Agents · \(rows.count)"] + (rows.isEmpty ? ["No supported CLI agents found"] : rows)
+        updateAgentPanel()
     }
     func updateAgentPanel() {
         guard showAgents else { agentPanel?.orderOut(nil); return }
@@ -602,6 +689,11 @@ final class Companion: NSObject, NSApplicationDelegate {
             p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.level = .floating
             p.hidesOnDeactivate = false; p.ignoresMouseEvents = false
             p.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; p.isReleasedWhenClosed = false
+            agentView.select = { [weak self] line in
+                guard let owner = self, let snapshot = owner.claudeSessions[line] else { return }
+                let control = owner.claudeControls[snapshot.id] ?? ClaudeControl(snapshot)
+                owner.claudeControls[snapshot.id] = control; control.show()
+            }
             agentView.changed = { [weak self] in self?.updateAgentPanel() }
             p.contentView = agentView; agentPanel = p
         }
@@ -849,6 +941,13 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+ } else if let index = CommandLine.arguments.firstIndex(of: "--render-control"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let control = ClaudeControl(ClaudeSnapshot(id: String(repeating: "a",count: 32),pid: 123,project: "Demo project",updated: Date().timeIntervalSince1970,state: "Connected",output: "Claude terminal preview\n\nReading project files…\nWaiting for your next instruction."))
+    let view = control.window.contentView!
+    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds,to: rep)
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
  } else if let index = CommandLine.arguments.firstIndex(of: "--render-cards"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let view = AgentListView(frame: NSRect(x: 0,y: 0,width: 280,height: 244))
