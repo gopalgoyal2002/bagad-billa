@@ -125,3 +125,9 @@ The cat displays an alert for 12 seconds and retains the latest 12 alerts under 
 Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device label, and coarse terminal application category are written locally. No command text, arguments, working directory, terminal output, or credentials are captured. Events use private files under `~/Library/Application Support/BagadBilli/events`, overwritten per shell process. The companion reads bounded files once per second and ignores stale events. Very rapid events from the same shell can be coalesced. This is a local convenience notification channel, not a security audit log; another process running as your user can write to it.
 
 Try `sleep 3`, then `false`, then `bagad-help`. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
+
+## Running agent list
+
+A panel above the cat lists recognized coding-agent executable processes owned by your macOS user, refreshing every five seconds. Supported executable names: codex, claude, aider, gemini, opencode, goose. Each row shows a process ID so multiple instances remain distinguishable. Toggle Show running agents above cat in the menu. The panel follows the cat and stays within the screen.
+
+“Running” means the process exists, not that an agent is actively reasoning. IDE extensions, subprocess agents inside another process, remote agents, and CLI tools whose executable appears only as node/python are not discoverable with this method. No command arguments or conversation text are inspected. This is a supported-process list, not a complete inventory of every agent in every application.

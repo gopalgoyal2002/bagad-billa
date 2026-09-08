@@ -239,6 +239,17 @@ final class TreatView: NSView {
     override func mouseDown(with event: NSEvent) { owner?.eatTreat() }
 }
 
+final class AgentListView: NSView {
+    var lines: [String] = [] { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedWhite: 0.10,alpha: 0.94).setFill()
+        NSBezierPath(roundedRect: bounds,xRadius: 10,yRadius: 10).fill()
+        for (i,line) in lines.enumerated() {
+            (line as NSString).draw(in: NSRect(x: 10,y: bounds.height-24-Double(i)*20,width: bounds.width-20,height: 19),withAttributes: [.font: NSFont.systemFont(ofSize: 11,weight: i == 0 ? .semibold : .regular),.foregroundColor: NSColor.white])
+        }
+    }
+}
+
 final class Companion: NSObject, NSApplicationDelegate {
     var panel: PetPanel!
     var pet = PetView()
@@ -302,6 +313,13 @@ final class Companion: NSObject, NSApplicationDelegate {
     var terminalMessage: String?
     var terminalItem: NSMenuItem!
     var terminalHistory = NSMenu(title: "Terminal activity")
+    var agentPanel: PetPanel?
+    let agentView = AgentListView()
+    var agentLines = ["Running agents", "Checking…"]
+    var agentCheck = 0.0
+    var agentScanning = false
+    var showAgents = UserDefaults.standard.object(forKey: "showAgents") as? Bool ?? true
+    var agentItem: NSMenuItem!
     let counts = [6,8,8,4,5,8,6,6,6,8,8]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -358,6 +376,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         if typingEnabled { requestTypingAccess() }
     }
     func buildMenu() {
+        agentItem = add("Show running agents above cat", #selector(toggleAgents))
         terminalItem = add("Terminal notifications", #selector(toggleTerminal))
         let history = NSMenuItem(title: "Recent terminal activity",action: nil,keyEquivalent: "")
         history.submenu = terminalHistory; menu.addItem(history)
@@ -403,6 +422,8 @@ final class Companion: NSObject, NSApplicationDelegate {
     }
     func tick() {
         let now = ProcessInfo.processInfo.systemUptime
+        updateAgentPanel()
+        if showAgents && now >= agentCheck && !agentScanning { agentCheck = now+5; scanAgents() }
         if now >= terminalCheck { terminalCheck = now+1; checkTerminals() }
         if now >= permissionCheck { permissionCheck = now + 1; refreshTypingMonitor() }
         if now >= audioCheck { audioCheck = now+2; audioActive = autoAudio && outputActive() }
@@ -508,6 +529,59 @@ final class Companion: NSObject, NSApplicationDelegate {
         }
     }
     var seenTerminalEvents: [String] = []
+    @objc func toggleAgents() {
+        showAgents.toggle(); UserDefaults.standard.set(showAgents,forKey: "showAgents"); syncOptions(); updateAgentPanel()
+    }
+    func scanAgents() {
+        agentScanning = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let task = Process(); task.executableURL = URL(fileURLWithPath: "/bin/ps")
+            // Executable names only, never command arguments or agent conversation text.
+            task.arguments = ["-U",String(getuid()),"-o","pid=,comm="]
+            let pipe = Pipe(); task.standardOutput = pipe; task.standardError = FileHandle.nullDevice
+            var lines: [String] = []
+            do {
+                try task.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
+                let names = ["codex":"Codex CLI","claude":"Claude CLI","aider":"Aider","gemini":"Gemini CLI","opencode":"OpenCode","goose":"Goose"]
+                for row in (String(data: data,encoding: .utf8) ?? "").split(separator: "\n") {
+                    let parts = row.split(maxSplits: 1,whereSeparator: { $0.isWhitespace })
+                    guard parts.count == 2, let pid = Int(parts[0]) else { continue }
+                    let executable = URL(fileURLWithPath: String(parts[1]).trimmingCharacters(in: .whitespaces)).lastPathComponent
+                    if let name = names[executable] { lines.append("● \(name) · PID \(pid)") }
+                }
+                if task.terminationStatus != 0 { lines = ["Process status unavailable"] }
+            } catch { lines = ["Process status unavailable"] }
+            let result = lines.sorted()
+            DispatchQueue.main.async {
+                guard let owner = self else { return }
+                owner.agentScanning = false
+                owner.agentLines = ["Running agents · \(result.count)"] + (result.isEmpty ? ["No supported CLI agents found"] : result)
+                owner.updateAgentPanel()
+            }
+        }
+    }
+    func updateAgentPanel() {
+        guard showAgents else { agentPanel?.orderOut(nil); return }
+        if agentPanel == nil {
+            let p = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 235,height: 60),styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
+            p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.level = .floating
+            p.hidesOnDeactivate = false; p.ignoresMouseEvents = true
+            p.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; p.isReleasedWhenClosed = false
+            p.contentView = agentView; agentPanel = p
+        }
+        guard let p = agentPanel else { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(panel.frame.center) } ?? NSScreen.main
+        let area = screen?.visibleFrame ?? panel.frame
+        let capacity = max(2,Int((area.height-20)/20))
+        var visible = Array(agentLines.prefix(capacity))
+        if agentLines.count > capacity { visible[capacity-1] = "+ \(agentLines.count-capacity+1) more processes" }
+        agentView.lines = visible
+        let height = Double(visible.count)*20+14
+        p.setContentSize(NSSize(width: 235,height: height))
+        p.setFrameOrigin(NSPoint(x: max(area.minX,min(panel.frame.midX-117.5,area.maxX-235)),y: max(area.minY,min(panel.frame.maxY+6,area.maxY-height))))
+        p.orderFrontRegardless()
+    }
     func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
     func announce(_ text: String, for duration: Double = 3) { notice = text; noticeUntil = ProcessInfo.processInfo.systemUptime+duration }
     func beginDrag() {
@@ -564,6 +638,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         return AudioObjectGetPropertyData(device,&address,0,nil,&size,&running) == noErr && running != 0
     }
     func syncOptions() {
+        agentItem?.state = showAgents ? .on : .off
         terminalItem?.state = terminalEnabled ? .on : .off
         walkItem?.state = walkReminders ? .on : .off
         musicItem?.state = musicMode ? .on : .off; audioItem?.state = autoAudio ? .on : .off
