@@ -22,5 +22,7 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Bagad Billa streams your microphone to Gemini Live only when you start voice chat, so you can speak and control this pet’s terminal tabs.</string>
 </dict>
 </plist>

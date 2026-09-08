@@ -97,6 +97,34 @@ final class PetPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+final class PetRootView: NSView {
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        for button in subviews where (900...902).contains(button.tag) {
+            button.frame = NSRect(x: Double(button.tag-900)*bounds.width/3, y: 1, width: bounds.width/3, height: 24)
+        }
+    }
+}
+final class PetControlButton: NSButton {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedWhite: isHighlighted ? 0.32 : 0.17, alpha: 0.96).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 1,dy: 1), xRadius: 6,yRadius: 6).fill()
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        (title as NSString).draw(in: NSRect(x: 0,y: 4,width: bounds.width,height: 16),withAttributes: [.font: NSFont.systemFont(ofSize: 10,weight: .medium),.foregroundColor: NSColor.white,.paragraphStyle: paragraph])
+    }
+}
+final class PetVoiceButton: NSButton {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedRed: 0.12, green: 0.24, blue: 0.26, alpha: isHighlighted ? 1 : 0.94).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 12, yRadius: 12).fill()
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        (title as NSString).draw(in: NSRect(x: 23, y: 5, width: 53, height: 17), withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white, .paragraphStyle: paragraph])
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 17, y: 11, width: 4, height: 8), xRadius: 2, yRadius: 2).fill()
+        let mic = NSBezierPath(); mic.move(to: NSPoint(x: 14, y: 13)); mic.curve(to: NSPoint(x: 24, y: 13), controlPoint1: NSPoint(x: 14, y: 5), controlPoint2: NSPoint(x: 24, y: 5)); mic.move(to: NSPoint(x: 19, y: 8)); mic.line(to: NSPoint(x: 19, y: 5)); mic.lineWidth = 1.4; NSColor.white.setStroke(); mic.stroke()
+    }
+}
+
 final class PetView: NSView {
     var typingPhase: Int? = nil
     var home: PetHome = .none
@@ -248,6 +276,7 @@ final class EmbeddedTerminal: NSObject, WKScriptMessageHandler, WKNavigationDele
     let output = Pipe()
     let directory: URL
     let writer = DispatchQueue(label: "bagad.terminal.input")
+    var number = 0
     var closed = false
     var started = false
     var ready = false
@@ -314,12 +343,13 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     let tabs = NSTabView()
     var terminals: [EmbeddedTerminal] = []
     var counter = 0
+    var voice: GeminiVoice?
     override init() {
         super.init(); window.title = "Bagad Billa · Terminal Desk"; window.isReleasedWhenClosed = false; window.delegate = self
-        window.minSize = NSSize(width: 520,height: 280); window.level = .floating
+        window.minSize = NSSize(width: 650,height: 280); window.level = .floating
         let root = window.contentView!
         tabs.frame = NSRect(x: 8,y: 8,width: 704,height: 382); tabs.autoresizingMask = [.width,.height]; tabs.delegate = self; root.addSubview(tabs)
-        for (title,selector,x,width) in [("+ Terminal",#selector(addDefault),8.0,100.0),("+ In folder…",#selector(addFolder),112.0,110.0),("End tab",#selector(closeTab),226.0,85.0),("Expand",#selector(expand),315.0,80.0),("Paste",#selector(paste),399.0,70.0),("Copy",#selector(copyText),473.0,70.0)] {
+        for (title,selector,x,width) in [("+ Terminal",#selector(addDefault),8.0,100.0),("+ In folder…",#selector(addFolder),112.0,110.0),("End tab",#selector(closeTab),226.0,85.0),("Expand",#selector(expand),315.0,80.0),("Paste",#selector(paste),399.0,70.0),("Copy",#selector(copyText),473.0,70.0),("Voice",#selector(openVoice),547.0,75.0)] {
             let b = NSButton(title: title,target: self,action: selector); b.bezelStyle = .rounded; b.frame = NSRect(x: x,y: 402,width: width,height: 28); b.autoresizingMask = [.minYMargin]; root.addSubview(b)
         }
         addDefault()
@@ -331,7 +361,7 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     }
     func add(_ directory: URL) {
         counter += 1
-        let terminal = EmbeddedTerminal(directory: directory); terminals.append(terminal)
+        let terminal = EmbeddedTerminal(directory: directory); terminal.number = counter; terminals.append(terminal)
         let tab = NSTabViewItem(identifier: terminal); tab.label = "\(counter) · \(directory.lastPathComponent)"; tab.view = terminal.web
         tabs.addTabViewItem(tab); tabs.selectTabViewItem(tab)
         window.title = "Bagad Billa · Terminal Desk · \(terminals.count) tabs"
@@ -367,7 +397,39 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
         NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); selected?.focus()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { window.orderOut(nil); return false }
-    func shutdown() { terminals.forEach { $0.stop() } }
+    @objc func openVoice() { if voice == nil { voice = GeminiVoice(desk: self) }; voice?.show() }
+    func voiceContext(_ completion: @escaping (String) -> Void) {
+        let items = Array(terminals.prefix(8))
+        var snapshots: [Int: String] = [:]
+        var remaining = items.count
+        guard remaining > 0 else { completion("No pet terminals are open."); return }
+        for terminal in items {
+            let id = terminal.number
+            terminal.web.evaluateJavaScript("window.voiceSnapshot()") { [weak self, weak terminal] result, _ in
+                if let self = self, let terminal = terminal, self.terminals.contains(where: { $0 === terminal }) {
+                    snapshots[id] = "Tab \(id), selected=\(self.selected === terminal), shellAlive=\(terminal.process?.isRunning == true):\n" + String((result as? String ?? "Screen unavailable").suffix(4000))
+                }
+                remaining -= 1
+                if remaining == 0 { completion(snapshots.keys.sorted().compactMap { snapshots[$0] }.joined(separator: "\n---\n")) }
+            }
+        }
+    }
+    func voiceAction(_ action: VoiceTerminalAction) -> [String:Any] {
+        if action.name == "list_terminals" {
+            return ["terminals":terminals.map { ["id":$0.number,"folder":$0.directory.lastPathComponent,"ready":$0.ready && $0.process?.isRunning == true,"selected":$0 === selected] as [String:Any] }]
+        }
+        if action.name == "create_terminal" { addDefault(); return ["created_terminal_id":counter,"status":"starting; list terminals before sending"] }
+        guard let id = action.terminalID,let terminal = terminals.first(where: { $0.number == id }),terminal.ready,terminal.process?.isRunning == true,!terminal.closed else { return ["error":"That pet terminal does not exist or is not ready."] }
+        if let tab = tabs.tabViewItems.first(where: { ($0.identifier as? EmbeddedTerminal) === terminal }) { tabs.selectTabViewItem(tab) }
+        if action.name == "send_terminal" {
+            let data = Data((action.text+(action.submit ? "\r" : "")).utf8)
+            terminal.send(["kind":"input","data":data.base64EncodedString()])
+            return ["status":"queued input; command outcome unknown","terminal_id":id,"text":action.text,"submitted":action.submit]
+        }
+        terminal.send(["kind":"input","data":Data([action.key == "escape" ? 27 : 3]).base64EncodedString()])
+        return ["status":"queued interrupt key; process outcome unknown","terminal_id":id,"key":action.key]
+    }
+    func shutdown() { voice?.stop(); terminals.forEach { $0.stop() } }
 }
 
 final class Companion: NSObject, NSApplicationDelegate {
@@ -449,13 +511,49 @@ final class Companion: NSObject, NSApplicationDelegate {
                 images[key] = image
             }
         }
-        panel = PetPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 167), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = PetPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 239), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        pet.owner = self; pet.frame = NSRect(origin: .zero, size: panel.frame.size)
-        panel.contentView = pet
+        let root = PetRootView(frame: NSRect(origin: .zero, size: panel.frame.size))
+        pet.owner = self; pet.frame = NSRect(x: 0, y: 72, width: 154, height: 167)
+        pet.autoresizingMask = [.width, .height]
+        root.addSubview(pet)
+        let voiceButton = PetVoiceButton(title: "Voice", target: self, action: #selector(openPetVoice))
+        voiceButton.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Voice")
+        voiceButton.imagePosition = .imageLeading
+        voiceButton.bezelStyle = .rounded
+        voiceButton.frame = NSRect(x: 33, y: 41, width: 88, height: 26)
+        voiceButton.autoresizingMask = [.minXMargin, .maxXMargin]
+        voiceButton.toolTip = "Open Gemini voice controls"
+        root.addSubview(voiceButton)
+        let activity = NSTextField(labelWithString: "Voice ready")
+        activity.alignment = .center; activity.font = .systemFont(ofSize: 10, weight: .medium)
+        activity.textColor = .white; activity.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 0.9); activity.drawsBackground = true
+        activity.frame = NSRect(x: 0,y: 27,width: 154,height: 14); activity.autoresizingMask = [.width]; root.addSubview(activity)
+        for (title, selector, x) in [("Mute", #selector(mutePetVoice), 0.0), ("End", #selector(endPetVoice), 49.0), ("⚙", #selector(voiceSettings), 98.0)] {
+            let button = PetControlButton(title: title,target: self,action: selector); button.bezelStyle = .rounded
+            button.tag = 900 + Int(x / 49)
+            button.frame = NSRect(x: x,y: 1,width: 48,height: 24); button.autoresizingMask = [.minXMargin,.maxXMargin]; root.addSubview(button)
+        }
+        Timer.scheduledTimer(withTimeInterval: 0.15,repeats: true) { [weak self, weak activity, weak voiceButton] _ in
+            let voice = self?.terminalDesk?.voice
+            let now = ProcessInfo.processInfo.systemUptime
+            activity?.stringValue = voice?.starting == true ? "Connecting…" : voice?.connected == true ? (voice?.muted == true ? "Muted" : now - (voice?.outputPulse ?? 0) < 0.5 ? "▂▆█▅▂ Speaking" : now - (voice?.inputPulse ?? 0) < 0.5 ? "▂▄▆▄▂ Listening" : "Live") : "Voice ready"
+            voiceButton?.title = voice?.connected == true || voice?.starting == true ? "Stop" : "Voice"
+            voiceButton?.needsDisplay = true
+            activity?.toolTip = voice?.status.stringValue
+        }
+        panel.contentView = root
+        if let index = CommandLine.arguments.firstIndex(of: "--render-pet-controls"), CommandLine.arguments.count > index+1 {
+            pet.sprite = images["0-0"]
+            if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
+            }
+            NSApp.terminate(nil); return
+        }
         let prefs = UserDefaults.standard
         autoSleep = prefs.object(forKey: "autoSleep") as? Bool ?? true
         mischief = prefs.object(forKey: "mischief") as? Bool ?? true
@@ -486,6 +584,41 @@ final class Companion: NSObject, NSApplicationDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--diagnostics"), CommandLine.arguments.count > index+1 {
             let report = "accessibilityTrusted=\(AXIsProcessTrusted())\ntypingEnabled=\(typingEnabled)\nglobalMonitor=\(globalKeys != nil)\n"
             try? report.write(toFile: CommandLine.arguments[index+1],atomically: true,encoding: .utf8)
+        }
+        if CommandLine.arguments.contains("--voice-tool-smoke") {
+            openTerminals(); let desk = terminalDesk!; desk.openVoice(); let voice = desk.voice!
+            voice.connected = true; voice.actions.state = .off
+            func call(_ id: String,_ name: String,_ args: [String:Any]) { voice.handle(["toolCall":["functionCalls":[["id":id,"name":name,"args":args]]]]) }
+            let initial = desk.terminals.count
+            call("blocked","create_terminal",[:]); precondition(desk.terminals.count == initial)
+            voice.actions.state = .on
+            call("new","create_terminal",[:]); call("new","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+            call("missing","send_terminal",["terminal_id":99999,"text":"bad","submit":true]); precondition(voice.replies["missing"]?["response"] as? [String:String] != nil)
+            let target = desk.terminals.last!
+            var tries = 0
+            Timer.scheduledTimer(withTimeInterval: 0.5,repeats: true) { timer in
+                tries += 1
+                if target.ready {
+                    timer.invalidate()
+                    call("send","send_terminal",["terminal_id":target.number,"text":"printf 'VOICE_%s\\n' 'ROUTE_OK'","submit":true])
+                    DispatchQueue.main.asyncAfter(deadline: .now()+2) {
+                        target.web.evaluateJavaScript("Array.from({length:term.buffer.active.length},(_,i)=>term.buffer.active.getLine(i).translateToString()).join('\\n')") { result,_ in
+                            guard (result as? String)?.contains("VOICE_ROUTE_OK") == true else { print("FAIL voice terminal input"); voice.stop(); desk.shutdown(); exit(1) }
+                            call("interrupt","interrupt_terminal",["terminal_id":target.number,"key":"ctrl_c"])
+                            voice.handle(["toolCallCancellation":["ids":["cancelled"]]])
+                            call("cancelled","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+                            voice.actions.state = .off; call("hangup", "hang_up", [:]); precondition(!voice.connected); call("after-stop","create_terminal",[:]); precondition(desk.terminals.count == initial+1)
+                            print("PASS: voice tool toggle, stable target IDs, duplicate suppression, shell delivery, cancellation, and stop gate")
+                            desk.voiceContext { text in
+                                precondition(text.contains("VOICE_ROUTE_OK") && text.contains("Tab \(target.number)"))
+                                print("PASS: bounded rendered terminal context and hang-up with controls disabled")
+                                NSApp.terminate(nil)
+                            }
+                        }
+                    }
+                } else if tries > 30 { timer.invalidate(); desk.shutdown(); exit(1) }
+            }
+            return
         }
         if let index = CommandLine.arguments.firstIndex(of: "--terminal-smoke"), CommandLine.arguments.count > index+1 {
             openTerminals()
@@ -567,7 +700,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         let point = NSEvent.mouseLocation
         let distance = hypot(point.x-lastMouse.x,point.y-lastMouse.y)
         if distance > 0.5 { life.activity(at: now) }
-        let face = NSRect(x: panel.frame.minX+panel.frame.width*0.2,y: panel.frame.minY+panel.frame.height*0.55,width: panel.frame.width*0.6,height: panel.frame.height*0.35)
+        let face = NSRect(x: panel.frame.minX+panel.frame.width*0.2,y: panel.frame.minY+pet.frame.minY+pet.frame.height*0.55,width: panel.frame.width*0.6,height: pet.frame.height*0.35)
         if face.contains(point) && NSEvent.pressedMouseButtons == 0 && distance > 0.5 {
             if now-pettingWindow > 1.5 { pettingWindow = now; pettingTravel = 0 }
             pettingTravel += min(distance,30)
@@ -626,7 +759,7 @@ final class Companion: NSObject, NSApplicationDelegate {
             // AppKit mouse and window coordinates both use a bottom-left origin,
             // including negative coordinates on secondary displays.
             let point = NSEvent.mouseLocation
-            let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + panel.frame.height * 0.68)
+            let face = NSPoint(x: panel.frame.midX, y: panel.frame.minY + pet.frame.minY + pet.frame.height * 0.68)
             if let d = direction(point.x - face.x, point.y - face.y) { row = 9 + d / 8; col = d % 8 }
         }
         if now < terminalUntil { pet.caption = terminalMessage }
@@ -666,6 +799,13 @@ final class Companion: NSObject, NSApplicationDelegate {
         }
     }
     var seenTerminalEvents: [String] = []
+    @objc func mutePetVoice() { terminalDesk?.voice?.toggleMic() }
+    @objc func endPetVoice() { terminalDesk?.voice?.stop() }
+    @objc func voiceSettings() { if terminalDesk == nil { terminalDesk = TerminalDesk() }; terminalDesk?.openVoice() }
+    @objc func openPetVoice() {
+        if terminalDesk == nil { terminalDesk = TerminalDesk() }
+        if terminalDesk?.voice == nil { terminalDesk?.voice = GeminiVoice(desk: terminalDesk!) }; terminalDesk?.voice?.quickStart()
+    }
     @objc func openTerminals() {
         if terminalDesk == nil { terminalDesk = TerminalDesk() }
         terminalDesk?.show(above: panel.frame)
@@ -840,7 +980,7 @@ final class Companion: NSObject, NSApplicationDelegate {
         if !NSScreen.screens.contains(where: { $0.visibleFrame.contains(panel.frame) }) { resetPosition() }
     }
     func resize(_ width: Double) {
-        panel.setContentSize(NSSize(width: width, height: width * 208 / 192)); screenChanged()
+        panel.setContentSize(NSSize(width: width, height: width * 208 / 192 + 72)); screenChanged()
     }
     @objc func small() { resize(115) }
     @objc func large() { resize(192) }
@@ -859,6 +999,13 @@ final class Companion: NSObject, NSApplicationDelegate {
 extension NSRect { var center: NSPoint { NSPoint(x: midX,y: midY) } }
 
 if CommandLine.arguments.contains("--self-test") {
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"claude","submit":true]) != nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":true,"text":"claude","submit":true]) == nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"a\nb","submit":true]) == nil)
+    precondition(VoiceTerminalAction.parse("send_terminal",["terminal_id":1,"text":"ok"]) == nil)
+    precondition(VoiceTerminalAction.parse("delete_files",[:]) == nil)
+    precondition(VoiceTerminalAction.parse("interrupt_terminal",["terminal_id":2,"key":"escape"]) != nil)
+    precondition(VoiceTerminalAction.parse("interrupt_terminal",["terminal_id":-1]) == nil)
     let terminal = TerminalEvent(kind: "failure",code: 1,duration: 4,time: 1,session: "ttys001",app: "vscode")
     precondition(terminal.valid && terminal.message == "ttys001: failed (1)")
     precondition(!TerminalEvent(kind: "execute",code: 0,duration: 0,time: 1,session: "terminal",app: "unknown").valid)
@@ -902,6 +1049,20 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+} else if CommandLine.arguments.contains("--audio-startup-smoke") {
+    _ = NSApplication.shared
+    let desk = TerminalDesk(); let voice = GeminiVoice(desk: desk)
+    do { try voice.startAudio(); print("PASS: audio engine started; no network session or audio storage") }
+    catch { let e = error as NSError; print("FAIL: \(e.domain) \(e.code)") }
+    voice.stop(); desk.shutdown()
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-voice"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let desk = TerminalDesk(); let voice = GeminiVoice(desk: desk)
+    let view = voice.window.contentView!; view.wantsLayer = true; view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+    view.cacheDisplay(in: view.bounds,to: rep)
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
+    desk.shutdown()
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let canvas = NSImage(size: NSSize(width: 768,height: 832))
