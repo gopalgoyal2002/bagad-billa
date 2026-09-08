@@ -107,3 +107,71 @@ All changes to `main` require a pull request, code-owner approval, passing macOS
 This repository is publicly readable; public visibility permits viewing and forking, not editing this repository. Its owner can manage access and change protection settings. No open-source license has been selected for this project.
 
 Headphone fit uses per-direction ear anchors and the same drawing transform as the cat, including breathing and box settling. Profile views hide the far ear cup. Headphones temporarily hide during action sprites without fitted anchors and return for idle, gaze, and typing poses.
+
+## Terminal notifications (zsh)
+
+Source the integration from your `~/.zshrc`, using the absolute path to this checkout:
+
+```zsh
+source /absolute/path/to/bagad-billa/integrations/bagad-billa.zsh
+```
+
+Open a new terminal tab, or run that source command in an existing zsh tab. This works in IDE terminals that start interactive zsh and load that configuration, as well as standalone terminals. Bash, fish, remote hosts, containers, and IDE task runners that do not load this shell configuration are not automatically covered.
+
+Failures are reported when the shell returns to its prompt. Successful commands are reported if they ran for at least three seconds. For explicit input/approval requests, run `bagad-help` before the waiting operation. Arbitrary prompts are not inferred from terminal output. A foreground command still running cannot automatically report its own need for input unless it explicitly integrates this signal.
+
+The cat displays an alert for 12 seconds and retains the latest 12 alerts under Recent terminal activity. Terminal notifications can be disabled in its menu. Alerts identify the terminal device (for example ttys001); exact IDE-tab activation is not implemented.
+
+Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device label, and coarse terminal application category are written locally. No command text, arguments, working directory, terminal output, or credentials are captured. Events use private files under `~/Library/Application Support/BagadBilli/events`, overwritten per shell process. The companion reads bounded files once per second and ignores stale events. Very rapid events from the same shell can be coalesced. This is a local convenience notification channel, not a security audit log; another process running as your user can write to it.
+
+Try `sleep 3`, then `false`, then `bagad-help`. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
+
+## Running agent list
+
+A panel above the cat lists recognized coding-agent executable processes owned by your macOS user, refreshing every five seconds. Supported executable names: codex, claude, aider, gemini, opencode, goose. Each row shows a process ID so multiple instances remain distinguishable. Toggle Show running agents above cat in the menu. The panel follows the cat and stays within the screen.
+
+“Running” means the process exists, not that an agent is actively reasoning. IDE extensions, subprocess agents inside another process, remote agents, and CLI tools whose executable appears only as node/python are not discoverable with this method. No command arguments or conversation text are inspected. This is a supported-process list, not a complete inventory of every agent in every application.
+
+The Agent Desk displays up to three process cards per page. Click the header to collapse/expand; click the left/right half of the footer to change pages. Failure/help terminal events expand the desk and highlight its latest-alert footer. Terminal alerts are not attributed to individual agents without a verified mapping. Cards explicitly show activity unknown; task descriptions, true busy/idle state, elapsed task time, and exact terminal navigation are not available from process discovery.
+
+## Claude Code live control (opt-in terminal launcher)
+
+Run this from an interactive terminal in the project you want Claude to work in:
+
+```bash
+/absolute/path/to/bagad-billa/integrations/claude/bagad-claude
+```
+
+It requires the existing Claude Code CLI, its normal login, and `/usr/bin/python3`. Extra CLI arguments are forwarded, for example `bagad-claude --resume` to use Claude's session picker. Exit the old session before resuming it; this launcher cannot attach to a terminal already running outside it.
+
+A **Live Claude** card appears above the pet. Click it to open a window with recent terminal output, an input field, **Send**, and **Interrupt (Esc)**. Send forwards your input through bracketed paste and Enter. Interrupt sends Escape, Claude's interactive cancel key; it is not a force-kill and its effect depends on Claude's current UI state. Answer permission prompts deliberately using the connected terminal or the input box; the integration does not automatically approve tools. Multi-choice interfaces requiring arrow keys remain available in the original terminal.
+
+Your original terminal stays interactive. The launcher owns only that Claude pseudo-terminal; it does not type into other terminals. Start additional launcher instances for separate project cards. Closing the control window leaves the terminal session running. Exiting the Claude process or closing its launcher removes the connection. No agent is started simply by launching the pet.
+
+**Live-output privacy:** unlike the metadata-only zsh integration, this explicitly connected mode reads Claude's terminal output and stores a rolling snapshot (up to 8,000 sanitized characters) in private local files under `~/Library/Application Support/BagadBilli/claude`. Output may contain project content or secrets Claude prints. Snapshots are deleted on normal shutdown; a crash can leave a stale snapshot, which the pet ignores after five seconds. User messages travel through a private local socket to Claude and may then be sent to Claude's service under its normal settings. The launcher does not add telemetry or bypass Claude permission checks. It displays recent output, not hidden reasoning or a structured understanding of task status.
+
+Control is scoped to launcher-created sessions. Ordinary detected processes remain view-only. Input fields target the selected connection, identified by project and PID. The app does not provide automatic takeover of existing sessions.
+
+Bridge test (fake Claude executable, no model/API request):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_claude_bridge.py
+```
+
+The test requires a macOS environment allowing pseudo-terminals and local sockets. It covers output transport, sending input, Escape, invalid controls, and cleanup. Live authenticated Claude behavior still depends on the installed CLI and terminal prompt state.
+
+## Personal assistant — stage 1
+
+Click the cat, or right-click → Open personal assistant. Type `status` / `What needs me?`, `agents`, `focus`, `walk`, or `help`. Status summarizes recent terminal events from this app session, which may already be resolved. It does not infer unresolved work. Select a connected Claude session and click Open Claude for live output and input controls. The session picker updates as connections appear/disappear.
+
+This first stage is a local command interface, not a general language model. Unknown requests are not executed. No additional provider/network calls are made by the chat panel. Chat history is bounded and held in memory; Clear chat removes it. Click now opens the assistant; Wave remains in the pet menu. See docs/assistant-roadmap.md for planned, unimplemented stages.
+
+## General AI chat — stage 2
+
+Unrecognized local commands now go to Claude using the installed `~/.local/bin/claude` login. The banner makes this explicit. Local `status`, `agents`, `focus`, `walk`, and `help` still run locally. Claude's normal usage limits apply.
+
+Attach files opens a file picker: UTF-8 text only, up to 24 KB each and 48 KB total. Filenames and byte count are visible; attachment content is captured at selection time. Each AI request sends the message, the last four AI exchanges (bounded answer length), and the selected file content. No terminal snapshots, directories, or other context are added automatically. Remove files prevents resending the attachments; prior AI replies may still reflect their contents until Clear chat. Clear chat stops a request and clears conversation memory, but attachments stay visible until Remove files.
+
+AI runs in an isolated temporary working directory using Claude safe mode, no tools, no MCP servers, a dedicated system prompt, and no session persistence. It cannot execute commands or edit files. This relies on the installed Claude CLI supporting those flags; errors are shown rather than retrying with weaker settings. Claude retains its own service-side data policies and account behavior. Stop AI terminates the local request; it does not guarantee remote usage was not incurred. Requests time out after two minutes. Responses appear when complete.
+
+Validation includes a live minimal Claude request with no attached files (returned OK), native build/self-tests, and a rendered assistant layout. Memory, voice, external accounts, and approved action execution remain later stages.
