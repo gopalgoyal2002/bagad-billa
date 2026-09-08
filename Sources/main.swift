@@ -315,7 +315,7 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     var terminals: [EmbeddedTerminal] = []
     var counter = 0
     override init() {
-        super.init(); window.title = "Bagad Billa · Terminals"; window.isReleasedWhenClosed = false; window.delegate = self
+        super.init(); window.title = "Bagad Billa · Terminal Desk"; window.isReleasedWhenClosed = false; window.delegate = self
         window.minSize = NSSize(width: 520,height: 280); window.level = .floating
         let root = window.contentView!
         tabs.frame = NSRect(x: 8,y: 8,width: 704,height: 382); tabs.autoresizingMask = [.width,.height]; tabs.delegate = self; root.addSubview(tabs)
@@ -334,6 +334,7 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
         let terminal = EmbeddedTerminal(directory: directory); terminals.append(terminal)
         let tab = NSTabViewItem(identifier: terminal); tab.label = "\(counter) · \(directory.lastPathComponent)"; tab.view = terminal.web
         tabs.addTabViewItem(tab); tabs.selectTabViewItem(tab)
+        window.title = "Bagad Billa · Terminal Desk · \(terminals.count) tabs"
     }
     var selected: EmbeddedTerminal? { tabs.selectedTabViewItem?.identifier as? EmbeddedTerminal }
     @objc func closeTab() {
@@ -343,6 +344,7 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
             guard alert.runModal() == .alertSecondButtonReturn else { return }
         }
         terminal.stop(); terminals.removeAll { $0 === terminal }; tabs.removeTabViewItem(tab)
+        window.title = "Bagad Billa · Terminal Desk · \(terminals.count) tabs"
     }
     @objc func expand() { window.zoom(nil) }
     @objc func paste() {
@@ -366,115 +368,6 @@ final class TerminalDesk: NSObject, NSWindowDelegate, NSTabViewDelegate {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { window.orderOut(nil); return false }
     func shutdown() { terminals.forEach { $0.stop() } }
-}
-
-struct ClaudeSnapshot: Decodable {
-    let id: String
-    let pid: Int
-    let project: String
-    let updated: Double
-    let state: String
-    let output: String
-}
-
-final class ClaudeControl: NSObject {
-    let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 560,height: 440),styleMask: [.titled,.closable,.resizable],backing: .buffered,defer: false)
-    let transcript = NSTextView()
-    let input = NSTextField()
-    let status = NSTextField(labelWithString: "")
-    var session: ClaudeSnapshot
-    init(_ session: ClaudeSnapshot) {
-        self.session = session; super.init()
-        window.title = "Claude · " + session.project; window.isReleasedWhenClosed = false
-        let root = window.contentView!
-        let scroll = NSScrollView(frame: NSRect(x: 12,y: 105,width: 536,height: 320))
-        scroll.autoresizingMask = [.width,.height]; scroll.hasVerticalScroller = true
-        transcript.isEditable = false; transcript.isSelectable = true; transcript.font = .monospacedSystemFont(ofSize: 11,weight: .regular)
-        transcript.autoresizingMask = [.width]; transcript.textContainer?.widthTracksTextView = true
-        scroll.documentView = transcript; root.addSubview(scroll)
-        input.frame = NSRect(x: 12,y: 58,width: 536,height: 30); input.autoresizingMask = [.width]; input.placeholderString = "Message or response to Claude…"; root.addSubview(input)
-        for (title,selector,x) in [("Send",#selector(send),12.0),("Interrupt (Esc)",#selector(interrupt),100.0)] {
-            let button = NSButton(title: title,target: self,action: selector); button.bezelStyle = .rounded; button.contentTintColor = .black; button.bezelColor = .lightGray; button.frame = NSRect(x: x,y: 18,width: title == "Send" ? 80 : 135,height: 30); root.addSubview(button)
-        }
-        status.frame = NSRect(x: 245,y: 21,width: 300,height: 22); status.font = .systemFont(ofSize: 10); root.addSubview(status)
-        update(session); window.center()
-    }
-    func update(_ value: ClaudeSnapshot) {
-        session = value
-        if transcript.string != value.output { transcript.string = value.output; transcript.scrollToEndOfDocument(nil) }
-    }
-    func show() { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(input) }
-    @objc func send() { let text = input.stringValue; guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; command("send",text: text) }
-    @objc func interrupt() { command("interrupt",text: "") }
-    func command(_ action: String,text: String) {
-        guard Date().timeIntervalSince1970-session.updated < 5 else { status.stringValue = "Disconnected; reconnect from terminal"; return }
-        guard let script = Bundle.main.resourceURL?.appendingPathComponent("claude-bridge.py") else { return }
-        let id = session.id
-        status.stringValue = "Sending…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let task = Process(); task.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); task.arguments = [script.path,"control"]
-            let pipe = Pipe(); task.standardInput = pipe; task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
-            var success = false
-            do {
-                try task.run()
-                let data = try JSONSerialization.data(withJSONObject: ["id":id,"action":action,"text":text])
-                try pipe.fileHandleForWriting.write(contentsOf: data); try pipe.fileHandleForWriting.close(); task.waitUntilExit(); success = task.terminationStatus == 0
-            } catch { }
-            DispatchQueue.main.async {
-                self?.status.stringValue = success ? (action == "send" ? "Sent to Claude terminal" : "Escape sent") : "Not sent — connection unavailable"
-                if success && action == "send" && self?.input.stringValue == text { self?.input.stringValue = "" }
-            }
-        }
-    }
-}
-
-final class AgentListView: NSView {
-    var lines: [String] = [] { didSet { needsDisplay = true } }
-    var collapsed = false
-    var page = 0
-    var activity: String? = nil
-    var attention = false
-    var changed: (() -> Void)?
-    var select: ((String) -> Void)?
-    var rows: [String] { Array(lines.dropFirst()) }
-    var pageCount: Int { max(1,(rows.count+2)/3) }
-    var cardCount: Int { min(3,max(0,rows.count-page*3)) }
-    var desiredHeight: Double { collapsed ? 46 : 100+Double(cardCount)*72 }
-    func label(_ text: String,_ x: Double,_ y: Double,_ size: Double,_ color: NSColor = .white,_ bold: Bool = false) {
-        let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail
-        (text as NSString).draw(in: NSRect(x: x,y: y,width: bounds.width-x-14,height: 19),withAttributes: [.font: NSFont.systemFont(ofSize: size,weight: bold ? .semibold : .regular),.foregroundColor: color,.paragraphStyle: style])
-    }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.075,alpha: 0.97).setFill()
-        NSBezierPath(roundedRect: bounds,xRadius: 15,yRadius: 15).fill()
-        label("AGENT DESK",14,bounds.height-29,12,.white,true)
-        label(collapsed ? "+" : "−",bounds.width-30,bounds.height-29,15,.systemTeal,true)
-        guard !collapsed else { return }
-        label(lines.first ?? "Checking…",14,bounds.height-50,10,.lightGray)
-        for (index,line) in rows.dropFirst(page*3).prefix(3).enumerated() {
-            let y = bounds.height-124-Double(index)*72
-            let card = NSRect(x: 10,y: y,width: bounds.width-20,height: 65)
-            NSColor(calibratedWhite: 0.14,alpha: 1).setFill()
-            NSBezierPath(roundedRect: card,xRadius: 9,yRadius: 9).fill()
-            label(line.replacingOccurrences(of: "● ",with: ""),20,y+41,11,.white,true)
-            let live = line.hasPrefix("Live Claude")
-            let isAgent = line.contains("PID")
-            label(live ? "● Connected · click to view and control" : isAgent ? "● Running · activity unknown" : "No live task information",20,y+22,10,isAgent ? .systemTeal : .lightGray)
-            label(live ? "Live terminal output · input · interrupt" : isAgent ? "Local process · refreshed every 5s" : "Supported CLI processes only",20,y+6,9,.lightGray)
-        }
-        label(activity ?? "No recent terminal alerts",14,25,10,attention ? .systemOrange : .lightGray)
-        label("‹   Page \(page+1)/\(pageCount)   ›",14,6,10,.systemTeal)
-    }
-    override func mouseDown(with event: NSEvent) {
-        let p = convert(event.locationInWindow,from: nil)
-        if p.y > bounds.height-44 { collapsed.toggle() }
-        else if !collapsed && p.y < 24 { page = (page + (p.x < bounds.width/2 ? pageCount-1 : 1)) % pageCount }
-        else if !collapsed {
-            let index = Int((bounds.height-59-p.y)/72)
-            if p.y <= bounds.height-59 && index >= 0 && index < cardCount { select?(rows[page*3+index]) }
-        }
-        changed?(); needsDisplay = true
-    }
 }
 
 final class Companion: NSObject, NSApplicationDelegate {
@@ -541,16 +434,6 @@ final class Companion: NSObject, NSApplicationDelegate {
     var terminalItem: NSMenuItem!
     var terminalHistory = NSMenu(title: "Terminal activity")
     var terminalDesk: TerminalDesk?
-    var claudeSessions: [String: ClaudeSnapshot] = [:]
-    var claudeControls: [String: ClaudeControl] = [:]
-    var processAgentLines: [String] = []
-    var agentPanel: PetPanel?
-    let agentView = AgentListView()
-    var agentLines = ["Running agents", "Checking…"]
-    var agentCheck = 0.0
-    var agentScanning = false
-    var showAgents = UserDefaults.standard.object(forKey: "showAgents") as? Bool ?? true
-    var agentItem: NSMenuItem!
     let counts = [6,8,8,4,5,8,6,6,6,8,8]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -628,11 +511,11 @@ final class Companion: NSObject, NSApplicationDelegate {
             }
             return
         }
+        openTerminals()
         if typingEnabled { requestTypingAccess() }
     }
     func buildMenu() {
         add("Open terminals", #selector(openTerminals))
-        agentItem = add("Show running agents above cat", #selector(toggleAgents))
         terminalItem = add("Terminal notifications", #selector(toggleTerminal))
         let history = NSMenuItem(title: "Recent terminal activity",action: nil,keyEquivalent: "")
         history.submenu = terminalHistory; menu.addItem(history)
@@ -678,9 +561,7 @@ final class Companion: NSObject, NSApplicationDelegate {
     }
     func tick() {
         let now = ProcessInfo.processInfo.systemUptime
-        updateAgentPanel()
-        if showAgents && now >= agentCheck && !agentScanning { agentCheck = now+5; scanAgents() }
-        if now >= terminalCheck { terminalCheck = now+1; checkTerminals(); readClaudeSessions() }
+        if now >= terminalCheck { terminalCheck = now+1; checkTerminals() }
         if now >= permissionCheck { permissionCheck = now + 1; refreshTypingMonitor() }
         if now >= audioCheck { audioCheck = now+2; audioActive = autoAudio && outputActive() }
         let point = NSEvent.mouseLocation
@@ -777,8 +658,6 @@ final class Companion: NSObject, NSApplicationDelegate {
             let identity = "\(event.session)-\(event.time)-\(event.kind)-\(event.code)"
             guard !seenTerminalEvents.contains(identity) else { continue }
             seenTerminalEvents.append(identity); if seenTerminalEvents.count > 256 { seenTerminalEvents.removeFirst() }
-            agentView.attention = event.kind == "attention" || event.kind == "failure"
-            if agentView.attention { agentView.collapsed = false }
             terminalMessage = event.message; terminalUntil = ProcessInfo.processInfo.systemUptime+12
             let item = NSMenuItem(title: event.message,action: nil,keyEquivalent: "")
             terminalHistory.insertItem(item,at: 0)
@@ -787,85 +666,9 @@ final class Companion: NSObject, NSApplicationDelegate {
         }
     }
     var seenTerminalEvents: [String] = []
-    @objc func toggleAgents() {
-        showAgents.toggle(); UserDefaults.standard.set(showAgents,forKey: "showAgents"); syncOptions(); updateAgentPanel()
-    }
-    func scanAgents() {
-        agentScanning = true
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let task = Process(); task.executableURL = URL(fileURLWithPath: "/bin/ps")
-            // Executable names only, never command arguments or agent conversation text.
-            task.arguments = ["-U",String(getuid()),"-o","pid=,comm="]
-            let pipe = Pipe(); task.standardOutput = pipe; task.standardError = FileHandle.nullDevice
-            var lines: [String] = []
-            do {
-                try task.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
-                let names = ["codex":"Codex CLI","claude":"Claude CLI","aider":"Aider","gemini":"Gemini CLI","opencode":"OpenCode","goose":"Goose"]
-                for row in (String(data: data,encoding: .utf8) ?? "").split(separator: "\n") {
-                    let parts = row.split(maxSplits: 1,whereSeparator: { $0.isWhitespace })
-                    guard parts.count == 2, let pid = Int(parts[0]) else { continue }
-                    let executable = URL(fileURLWithPath: String(parts[1]).trimmingCharacters(in: .whitespaces)).lastPathComponent
-                    if let name = names[executable] { lines.append("● \(name) · PID \(pid)") }
-                }
-                if task.terminationStatus != 0 { lines = ["Process status unavailable"] }
-            } catch { lines = ["Process status unavailable"] }
-            let result = lines.sorted()
-            DispatchQueue.main.async {
-                guard let owner = self else { return }
-                owner.agentScanning = false
-                owner.processAgentLines = result
-                owner.readClaudeSessions()
-                owner.updateAgentPanel()
-            }
-        }
-    }
     @objc func openTerminals() {
         if terminalDesk == nil { terminalDesk = TerminalDesk() }
         terminalDesk?.show(above: panel.frame)
-    }
-    func readClaudeSessions() {
-        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BagadBilli/claude")
-        claudeSessions = [:]
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory,includingPropertiesForKeys: [.fileSizeKey,.isSymbolicLinkKey])) ?? []
-        for file in files.prefix(128) where file.pathExtension == "json" {
-            guard let info = try? file.resourceValues(forKeys: [.fileSizeKey,.isSymbolicLinkKey]), info.isSymbolicLink != true, (info.fileSize ?? 999999)>0, (info.fileSize ?? 999999)<64000,
-                  let data = try? Data(contentsOf: file),let item = try? JSONDecoder().decode(ClaudeSnapshot.self,from: data),
-                  item.id.count == 32,item.id.allSatisfy({ $0.isHexDigit }),Date().timeIntervalSince1970-item.updated < 5, item.updated <= Date().timeIntervalSince1970+2 else { continue }
-            let key = "Live Claude · \(item.project.prefix(25)) · \(item.pid)"
-            claudeSessions[key] = item; claudeControls[item.id]?.update(item)
-        }
-        let controlledPIDs = Set(claudeSessions.values.map { String($0.pid) })
-        let remaining = processAgentLines.filter { !controlledPIDs.contains($0.components(separatedBy: "PID ").last ?? "") }
-        let rows = claudeSessions.keys.sorted()+remaining
-        agentLines = ["Agents · \(rows.count)"] + (rows.isEmpty ? ["No supported CLI agents found"] : rows)
-        updateAgentPanel()
-    }
-    func updateAgentPanel() {
-        guard showAgents else { agentPanel?.orderOut(nil); return }
-        if agentPanel == nil {
-            let p = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 235,height: 60),styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
-            p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.level = .floating
-            p.hidesOnDeactivate = false; p.ignoresMouseEvents = false
-            p.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; p.isReleasedWhenClosed = false
-            agentView.select = { [weak self] line in
-                guard let owner = self, let snapshot = owner.claudeSessions[line] else { return }
-                let control = owner.claudeControls[snapshot.id] ?? ClaudeControl(snapshot)
-                owner.claudeControls[snapshot.id] = control; control.show()
-            }
-            agentView.changed = { [weak self] in self?.updateAgentPanel() }
-            p.contentView = agentView; agentPanel = p
-        }
-        guard let p = agentPanel else { return }
-        let screen = NSScreen.screens.first { $0.frame.contains(panel.frame.center) } ?? NSScreen.main
-        let area = screen?.visibleFrame ?? panel.frame
-        agentView.lines = agentLines
-        agentView.page = min(agentView.page,agentView.pageCount-1)
-        agentView.activity = terminalMessage
-        let height = agentView.desiredHeight
-        p.setContentSize(NSSize(width: 280,height: height))
-        p.setFrameOrigin(NSPoint(x: max(area.minX,min(panel.frame.midX-140,area.maxX-280)),y: max(area.minY,min(panel.frame.maxY+6,area.maxY-height))))
-        p.orderFrontRegardless()
     }
     func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
     func announce(_ text: String, for duration: Double = 3) { notice = text; noticeUntil = ProcessInfo.processInfo.systemUptime+duration }
@@ -923,7 +726,6 @@ final class Companion: NSObject, NSApplicationDelegate {
         return AudioObjectGetPropertyData(device,&address,0,nil,&size,&running) == noErr && running != 0
     }
     func syncOptions() {
-        agentItem?.state = showAgents ? .on : .off
         terminalItem?.state = terminalEnabled ? .on : .off
         walkItem?.state = walkReminders ? .on : .off
         musicItem?.state = musicMode ? .on : .off; audioItem?.state = autoAudio ? .on : .off
@@ -1100,21 +902,6 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
- } else if let index = CommandLine.arguments.firstIndex(of: "--render-control"), CommandLine.arguments.count > index+1 {
-    _ = NSApplication.shared
-    let control = ClaudeControl(ClaudeSnapshot(id: String(repeating: "a",count: 32),pid: 123,project: "Demo project",updated: Date().timeIntervalSince1970,state: "Connected",output: "Claude terminal preview\n\nReading project files…\nWaiting for your next instruction."))
-    let view = control.window.contentView!
-    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
-    view.cacheDisplay(in: view.bounds,to: rep)
-    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
- } else if let index = CommandLine.arguments.firstIndex(of: "--render-cards"), CommandLine.arguments.count > index+1 {
-    _ = NSApplication.shared
-    let view = AgentListView(frame: NSRect(x: 0,y: 0,width: 280,height: 244))
-    view.lines = ["Running agents · 2", "● Codex CLI · PID 123", "● Claude CLI · PID 456"]
-    view.activity = "ttys001: needs your help"; view.attention = true
-    let preview = NSImage(size: view.frame.size); preview.lockFocus(); view.draw(view.bounds); preview.unlockFocus()
-    let rep = NSBitmapImageRep(data: preview.tiffRepresentation!)!
-    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let canvas = NSImage(size: NSSize(width: 768,height: 832))
