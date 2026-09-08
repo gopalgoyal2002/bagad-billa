@@ -241,12 +241,44 @@ final class TreatView: NSView {
 
 final class AgentListView: NSView {
     var lines: [String] = [] { didSet { needsDisplay = true } }
+    var collapsed = false
+    var page = 0
+    var activity: String? = nil
+    var attention = false
+    var changed: (() -> Void)?
+    var rows: [String] { Array(lines.dropFirst()) }
+    var pageCount: Int { max(1,(rows.count+2)/3) }
+    var cardCount: Int { min(3,max(0,rows.count-page*3)) }
+    var desiredHeight: Double { collapsed ? 46 : 100+Double(cardCount)*72 }
+    func label(_ text: String,_ x: Double,_ y: Double,_ size: Double,_ color: NSColor = .white,_ bold: Bool = false) {
+        let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail
+        (text as NSString).draw(in: NSRect(x: x,y: y,width: bounds.width-x-14,height: 19),withAttributes: [.font: NSFont.systemFont(ofSize: size,weight: bold ? .semibold : .regular),.foregroundColor: color,.paragraphStyle: style])
+    }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.10,alpha: 0.94).setFill()
-        NSBezierPath(roundedRect: bounds,xRadius: 10,yRadius: 10).fill()
-        for (i,line) in lines.enumerated() {
-            (line as NSString).draw(in: NSRect(x: 10,y: bounds.height-24-Double(i)*20,width: bounds.width-20,height: 19),withAttributes: [.font: NSFont.systemFont(ofSize: 11,weight: i == 0 ? .semibold : .regular),.foregroundColor: NSColor.white])
+        NSColor(calibratedWhite: 0.075,alpha: 0.97).setFill()
+        NSBezierPath(roundedRect: bounds,xRadius: 15,yRadius: 15).fill()
+        label("AGENT DESK",14,bounds.height-29,12,.white,true)
+        label(collapsed ? "+" : "−",bounds.width-30,bounds.height-29,15,.systemTeal,true)
+        guard !collapsed else { return }
+        label(lines.first ?? "Checking…",14,bounds.height-50,10,.lightGray)
+        for (index,line) in rows.dropFirst(page*3).prefix(3).enumerated() {
+            let y = bounds.height-124-Double(index)*72
+            let card = NSRect(x: 10,y: y,width: bounds.width-20,height: 65)
+            NSColor(calibratedWhite: 0.14,alpha: 1).setFill()
+            NSBezierPath(roundedRect: card,xRadius: 9,yRadius: 9).fill()
+            label(line.replacingOccurrences(of: "● ",with: ""),20,y+41,11,.white,true)
+            let isAgent = line.contains("PID")
+            label(isAgent ? "● Running · activity unknown" : "No live task information",20,y+22,10,isAgent ? .systemTeal : .lightGray)
+            label(isAgent ? "Local process · refreshed every 5s" : "Supported CLI processes only",20,y+6,9,.lightGray)
         }
+        label(activity ?? "No recent terminal alerts",14,25,10,attention ? .systemOrange : .lightGray)
+        label("‹   Page \(page+1)/\(pageCount)   ›",14,6,10,.systemTeal)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow,from: nil)
+        if p.y > bounds.height-44 { collapsed.toggle() }
+        else if !collapsed && p.y < 24 { page = (page + (p.x < bounds.width/2 ? pageCount-1 : 1)) % pageCount }
+        changed?(); needsDisplay = true
     }
 }
 
@@ -521,6 +553,8 @@ final class Companion: NSObject, NSApplicationDelegate {
             let identity = "\(event.session)-\(event.time)-\(event.kind)-\(event.code)"
             guard !seenTerminalEvents.contains(identity) else { continue }
             seenTerminalEvents.append(identity); if seenTerminalEvents.count > 256 { seenTerminalEvents.removeFirst() }
+            agentView.attention = event.kind == "attention" || event.kind == "failure"
+            if agentView.attention { agentView.collapsed = false }
             terminalMessage = event.message; terminalUntil = ProcessInfo.processInfo.systemUptime+12
             let item = NSMenuItem(title: event.message,action: nil,keyEquivalent: "")
             terminalHistory.insertItem(item,at: 0)
@@ -566,20 +600,20 @@ final class Companion: NSObject, NSApplicationDelegate {
         if agentPanel == nil {
             let p = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 235,height: 60),styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
             p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.level = .floating
-            p.hidesOnDeactivate = false; p.ignoresMouseEvents = true
+            p.hidesOnDeactivate = false; p.ignoresMouseEvents = false
             p.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; p.isReleasedWhenClosed = false
+            agentView.changed = { [weak self] in self?.updateAgentPanel() }
             p.contentView = agentView; agentPanel = p
         }
         guard let p = agentPanel else { return }
         let screen = NSScreen.screens.first { $0.frame.contains(panel.frame.center) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? panel.frame
-        let capacity = max(2,Int((area.height-20)/20))
-        var visible = Array(agentLines.prefix(capacity))
-        if agentLines.count > capacity { visible[capacity-1] = "+ \(agentLines.count-capacity+1) more processes" }
-        agentView.lines = visible
-        let height = Double(visible.count)*20+14
-        p.setContentSize(NSSize(width: 235,height: height))
-        p.setFrameOrigin(NSPoint(x: max(area.minX,min(panel.frame.midX-117.5,area.maxX-235)),y: max(area.minY,min(panel.frame.maxY+6,area.maxY-height))))
+        agentView.lines = agentLines
+        agentView.page = min(agentView.page,agentView.pageCount-1)
+        agentView.activity = terminalMessage
+        let height = agentView.desiredHeight
+        p.setContentSize(NSSize(width: 280,height: height))
+        p.setFrameOrigin(NSPoint(x: max(area.minX,min(panel.frame.midX-140,area.maxX-280)),y: max(area.minY,min(panel.frame.maxY+6,area.maxY-height))))
         p.orderFrontRegardless()
     }
     func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
@@ -815,6 +849,14 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+ } else if let index = CommandLine.arguments.firstIndex(of: "--render-cards"), CommandLine.arguments.count > index+1 {
+    _ = NSApplication.shared
+    let view = AgentListView(frame: NSRect(x: 0,y: 0,width: 280,height: 244))
+    view.lines = ["Running agents · 2", "● Codex CLI · PID 123", "● Claude CLI · PID 456"]
+    view.activity = "ttys001: needs your help"; view.attention = true
+    let preview = NSImage(size: view.frame.size); preview.lockFocus(); view.draw(view.bounds); preview.unlockFocus()
+    let rep = NSBitmapImageRep(data: preview.tiffRepresentation!)!
+    try! rep.representation(using: .png,properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index+1]))
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let canvas = NSImage(size: NSSize(width: 768,height: 832))
