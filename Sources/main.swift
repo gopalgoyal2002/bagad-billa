@@ -82,6 +82,8 @@ final class PetView: NSView {
     var happy = false
     var stretching = false
     var headphones = false
+    var gazeDirection: Int? = nil
+    var headphonesFitAvailable = true
     var clock = 0.0
     var caption: String? = nil
     var sprite: NSImage? { didSet { needsDisplay = true } }
@@ -111,18 +113,34 @@ final class PetView: NSView {
             body.size.height -= 8*sy; body.origin.y += lift*6*sy
         }
         sprite?.draw(in: body, from: .zero, operation: .sourceOver, fraction: 1)
-        if headphones {
-            let bob = !snoozing ? sin(clock*4)*2*sy : 0
-            NSColor(calibratedWhite: 0.19,alpha: 1).setStroke()
+        if headphones && headphonesFitAvailable {
+            // Ear-cup centers in each original 192x208 sprite, bottom-left coordinates.
+            // The far cup is hidden for profile poses; both cups share the body transform.
+            let fits: [(Double,Double,Double,Double,Bool)] = [
+                (40,163,132,163,false), (46,163,118,169,true),
+                (46,165,112,173,true), (54,166,119,174,true),
+                (87,171,121,163,true), (77,150,127,167,true),
+                (60,143,128,161,true), (67,134,143,153,false),
+                (41,150,127,150,false), (40,140,122,145,false),
+                (65,155,107,148,true), (65,156,103,151,true),
+                (67,153,98,151,true), (64,157,106,162,true),
+                (68,169,125,164,true), (70,173,133,165,true)
+            ]
+            let f = gazeDirection.map { fits[$0] } ?? (42,153,139,153,false)
+            let bx = body.width/192, by = body.height/208
+            func point(_ x: Double,_ y: Double) -> NSPoint { NSPoint(x: body.minX+x*bx,y: body.minY+y*by) }
             let band = NSBezierPath()
-            band.move(to: NSPoint(x: 42*sx,y: 123*sy+bob))
-            band.curve(to: NSPoint(x: 150*sx,y: 123*sy+bob),controlPoint1: NSPoint(x: 34*sx,y: 199*sy+bob),controlPoint2: NSPoint(x: 158*sx,y: 199*sy+bob))
-            band.lineWidth = 8*sx; band.stroke()
-            for x in [35.0,140.0] {
+            band.move(to: point(f.0,f.1))
+            band.curve(to: point(f.2,f.3),controlPoint1: point(f.0-3,max(f.1,f.3)+(f.4 ? 18 : 34)),controlPoint2: point(f.2+3,max(f.1,f.3)+(f.4 ? 18 : 34)))
+            NSColor(calibratedWhite: 0.19,alpha: 1).setStroke(); band.lineWidth = 6*bx; band.stroke()
+            let visible = f.4 ? [(gazeDirection! < 8 ? f.0 : f.2,gazeDirection! < 8 ? f.1 : f.3)] : [(f.0,f.1),(f.2,f.3)]
+            for (x,y) in visible {
+                let center = point(x,y)
+                let cup = NSRect(x: center.x-9*bx,y: center.y-13*by,width: 18*bx,height: 26*by)
                 NSColor(calibratedWhite: 0.16,alpha: 1).setFill()
-                NSBezierPath(roundedRect: NSRect(x: x*sx,y: 113*sy+bob,width: 19*sx,height: 37*sy),xRadius: 7*sx,yRadius: 7*sy).fill()
+                NSBezierPath(roundedRect: cup,xRadius: 6*bx,yRadius: 6*by).fill()
                 NSColor.systemTeal.setFill()
-                NSBezierPath(roundedRect: NSRect(x: (x+4)*sx,y: 119*sy+bob,width: 11*sx,height: 25*sy),xRadius: 4*sx,yRadius: 4*sy).fill()
+                NSBezierPath(roundedRect: cup.insetBy(dx: 4*bx,dy: 4*by),xRadius: 3*bx,yRadius: 3*by).fill()
             }
         }
         if home == .box {
@@ -421,6 +439,8 @@ final class Companion: NSObject, NSApplicationDelegate {
             if let d = direction(point.x - face.x, point.y - face.y) { row = 9 + d / 8; col = d % 8 }
         }
         if now < walkUntil { pet.caption = "Stand up & take a short walk" }
+        pet.gazeDirection = row >= 9 ? (row-9)*8+col : nil
+        pet.headphonesFitAvailable = row == 0 || row >= 9
         pet.sprite = images["\(row)-\(col)"]
     }
     func savePosition() { UserDefaults.standard.set(panel.frame.minX, forKey: "petX"); UserDefaults.standard.set(panel.frame.minY, forKey: "petY") }
@@ -652,17 +672,17 @@ if CommandLine.arguments.contains("--self-test") {
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-gallery"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
-    let canvas = NSImage(size: NSSize(width: 768,height: 208))
+    let canvas = NSImage(size: NSSize(width: 768,height: 832))
     canvas.lockFocus()
-    NSColor(calibratedWhite: 0.9,alpha: 1).setFill(); NSRect(x: 0,y: 0,width: 768,height: 208).fill()
-    for i in 0..<4 {
+    NSColor(calibratedWhite: 0.9,alpha: 1).setFill(); NSRect(x: 0,y: 0,width: 768,height: 832).fill()
+    for i in 0..<16 {
         let view = PetView(frame: NSRect(x: 0,y: 0,width: 192,height: 208))
-        view.sprite = NSImage(contentsOf: Bundle.main.resourceURL!.appendingPathComponent("frames/0-1.png"))
-        view.clock = 1; view.home = i == 2 ? .box : .cushion
-        view.headphones = i == 0 || i == 1; view.typingPhase = i == 1 ? 1 : nil
-        view.snoozing = i == 2; view.happy = i == 3
+        view.sprite = NSImage(contentsOf: Bundle.main.resourceURL!.appendingPathComponent("frames/\(9+i/8)-\(i%8).png"))
+        view.clock = 1; view.home = .cushion; view.gazeDirection = i
+        view.headphones = true; view.typingPhase = nil
+        view.snoozing = false; view.happy = false
         NSGraphicsContext.saveGraphicsState()
-        let transform = NSAffineTransform(); transform.translateX(by: Double(i)*192,yBy: 0); transform.concat()
+        let transform = NSAffineTransform(); transform.translateX(by: Double(i%4)*192,yBy: Double(3-i/4)*208); transform.concat()
         view.draw(view.bounds)
         NSGraphicsContext.restoreGraphicsState()
     }
