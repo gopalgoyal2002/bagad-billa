@@ -126,52 +126,49 @@ Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device 
 
 Try `sleep 3`, then `false`, then `bagad-help`. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
 
-## Running agent list
+## Terminals above the pet
 
-A panel above the cat lists recognized coding-agent executable processes owned by your macOS user, refreshing every five seconds. Supported executable names: codex, claude, aider, gemini, opencode, goose. Each row shows a process ID so multiple instances remain distinguishable. Toggle Show running agents above cat in the menu. The panel follows the cat and stays within the screen.
+The Agent Desk, process scan, connected-agent cards, and personal-assistant/AI chat have been removed. Terminal Desk opens above the pet on startup. Click the cat, or use **Open terminals** in its menu, to reopen it. The title shows the number of open tabs. Each tab is an independent terminal; switch tabs to view its output.
 
-“Running” means the process exists, not that an agent is actively reasoning. IDE extensions, subprocess agents inside another process, remote agents, and CLI tools whose executable appears only as node/python are not discoverable with this method. No command arguments or conversation text are inspected. This is a supported-process list, not a complete inventory of every agent in every application.
+- Type `claude` normally, just as in another terminal. No special launcher is needed for using Claude here.
+- **+ Terminal** starts another independent zsh session in your home folder.
+- **+ In folder…** lets you choose the working directory for a new tab.
+- Drag a window edge to resize, or click **Expand** to zoom. Shell rows/columns update with the view.
+- Use the tabs to switch between sessions. **Copy** copies selected terminal text; **Paste** uses the terminal's paste handling.
+- Closing the terminal window hides it and keeps sessions running. Click the cat to reopen it.
+- **End tab** asks before closing its shell. Quitting the pet closes all of its terminal sessions. Commands may be interrupted; save your work first.
 
-The Agent Desk displays up to three process cards per page. Click the header to collapse/expand; click the left/right half of the footer to change pages. Failure/help terminal events expand the desk and highlight its latest-alert footer. Terminal alerts are not attributed to individual agents without a verified mapping. Cards explicitly show activity unknown; task descriptions, true busy/idle state, elapsed task time, and exact terminal navigation are not available from process discovery.
+This is an interactive zsh terminal, not an AI command interpreter. Commands you type have your normal account access and run immediately, just like a normal terminal. The app neither auto-approves Claude prompts nor supplies commands on your behalf. Your ordinary shell startup files and history settings apply. Embedded terminal scrollback stays in memory (3,000 lines); it is not added to a separate pet transcript. Existing optional bagad-claude launcher sessions still work separately.
 
-## Claude Code live control (opt-in terminal launcher)
+Rendering uses locally bundled xterm.js 5.5.0 and addon-fit 0.10.0, with their MIT licenses in Resources/terminal. No CDN or local network server is used. A Python helper owns each pseudo-terminal over private process pipes. The web view is limited to its bundled page, blocks network content, and receives output as bytes rather than HTML. Python and WebKit are needed at runtime, in addition to the macOS requirements above.
 
-Run this from an interactive terminal in the project you want Claude to work in:
+Tests: `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_terminal_host.py` verifies shell execution, resize, Ctrl-C, tab isolation, and shutdown using harmless commands. A logged-in GUI session can run `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --terminal-smoke "$PWD/build/terminal-preview.png"` to verify real shell output reaches the embedded renderer. These tests require PTY access.
 
-```bash
-/absolute/path/to/bagad-billa/integrations/claude/bagad-claude
-```
+## Gemini Live voice for pet terminals
 
-It requires the existing Claude Code CLI, its normal login, and `/usr/bin/python3`. Extra CLI arguments are forwarded, for example `bagad-claude --resume` to use Claude's session picker. Exit the old session before resuming it; this launcher cannot attach to a terminal already running outside it.
+Click **Voice** in Terminal Desk. Enter a Gemini API key in the secure field (never in source code or chat), keep the suggested Live model or enter one available to your account, and click **Start voice**. Grant macOS microphone permission when asked. The key is saved in macOS Keychain, not preferences, source, or logs. Use **Forget saved key** in voice settings to remove it. macOS may request Keychain access after an app update. Google API billing/quota applies; a consumer Gemini subscription is not automatically an API credential.
 
-A **Live Claude** card appears above the pet. Click it to open a window with recent terminal output, an input field, **Send**, and **Interrupt (Esc)**. Send forwards your input through bracketed paste and Enter. Interrupt sends Escape, Claude's interactive cancel key; it is not a force-kill and its effect depends on Claude's current UI state. Answer permission prompts deliberately using the connected terminal or the input box; the integration does not automatically approve tools. Multi-choice interfaces requiring arrow keys remain available in the original terminal.
+To allow actions, enable **Allow voice to control this pet’s terminals**. Try:
 
-Your original terminal stays interactive. The launcher owns only that Claude pseudo-terminal; it does not type into other terminals. Start additional launcher instances for separate project cards. Closing the control window leaves the terminal session running. Exiting the Claude process or closing its launcher removes the connection. No agent is started simply by launching the pet.
+- “List my terminals.”
+- “Create a new terminal.”
+- “In terminal 2, type claude and press Enter.”
+- “Send hello to terminal 2 without pressing Enter.”
+- “Send Control-C to terminal 2.”
+- “Press Escape in terminal 2.”
 
-**Live-output privacy:** unlike the metadata-only zsh integration, this explicitly connected mode reads Claude's terminal output and stores a rolling snapshot (up to 8,000 sanitized characters) in private local files under `~/Library/Application Support/BagadBilli/claude`. Output may contain project content or secrets Claude prints. Snapshots are deleted on normal shutdown; a crash can leave a stale snapshot, which the pet ignores after five seconds. User messages travel through a private local socket to Claude and may then be sent to Claude's service under its normal settings. The launcher does not add telemetry or bypass Claude permission checks. It displays recent output, not hidden reasoning or a structured understanding of task status.
+IDs are the stable numbers shown in the tab labels for this app run. New tabs start in your home directory. Only ready, running tabs created by the pet can receive input. Input is a single line, up to 16 KB; control characters are rejected except the separately implemented Enter and interrupt keys. A queued input result does not mean its command succeeded. Claude-specific interactive prompts remain Claude’s responsibility; the voice feature does not auto-approve them. Commands spoken and submitted have your normal terminal permissions. Watch the selected terminal to see actions and their output. Disable terminal control when only chatting.
 
-Control is scoped to launcher-created sessions. Ordinary detected processes remain view-only. Input fields target the selected connection, identified by project and PID. The app does not provide automatic takeover of existing sessions.
+**Mute** stops sending microphone chunks while leaving the connection/audio engine open; **Stop** disconnects and releases audio capture/playback. Closing settings leaves voice running in the pet bar. **End**, the **Stop** button, saying “hang up”, or quitting the pet stops voice. No background listening starts at launch. Talking over Gemini clears its queued reply audio when the server reports interruption. Use headphones if your audio device's echo cancellation is unavailable. Reconnect after session expiry or device/network failures; session resumption is not implemented.
 
-Bridge test (fake Claude executable, no model/API request):
+Scope is intentionally limited to listing/creating pet terminals, sending requested text, and Ctrl-C/Escape. It has no access to external terminal windows, files, or pet configuration. With **Share recent pet terminal output with Gemini** enabled, changed snapshots are sent every four seconds: up to eight tabs, the last 60 rendered lines and at most 4,000 characters per tab. This can include private terminal text; disable sharing to stop future snapshots (already sent context remains in the current session). Snapshots may be truncated or stale. Terminal context is untrusted data and cannot authorize commands. The voice stream, transcription, tool definitions, terminal IDs/folder labels, and tool results are exchanged with Google while connected. Audio/transcripts are not saved to disk; there is no conversation UI. Google's service data policies still apply. The app keeps a per-session tool-call cache so duplicate IDs do not repeat actions and ignores cancelled or post-disconnect calls.
 
-```bash
-PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_claude_bridge.py
-```
+Implementation: native AVAudioEngine microphone/playback and an ephemeral URLSession WebSocket to Google's Live API. Sends 16-bit PCM at the input device's reported rate (Gemini supports resampling) and plays 24 kHz PCM replies. Uses `gemini-3.1-flash-live-preview` by default; preview availability can change. No extra package or server is required.
 
-The test requires a macOS environment allowing pseudo-terminals and local sockets. It covers output transport, sending input, Escape, invalid controls, and cleanup. Live authenticated Claude behavior still depends on the installed CLI and terminal prompt state.
+Validation: native build/self-tests include tool argument validation. `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --voice-tool-smoke` uses synthetic model calls and real owned shell tabs to test disabled control, stable target routing, duplicate suppression, actual shell delivery, cancellation, and the stop gate. It makes no Gemini request and does not open the microphone. Live authentication, speech recognition, microphone hardware, and reply playback require testing with your key and devices.
 
-## Personal assistant — stage 1
+Protocol references: [Google Live WebSocket reference](https://ai.google.dev/api/live) and [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
 
-Click the cat, or right-click → Open personal assistant. Type `status` / `What needs me?`, `agents`, `focus`, `walk`, or `help`. Status summarizes recent terminal events from this app session, which may already be resolved. It does not infer unresolved work. Select a connected Claude session and click Open Claude for live output and input controls. The session picker updates as connections appear/disappear.
+The **Voice** button beneath the cat opens setup the first time; after saving a key it starts voice directly. The compact bar shows connection, incoming/outgoing audio packet activity, and mute state. **Mute** toggles the microphone stream; **End** hangs up; **⚙** opens settings. Terminal controls and context sharing are enabled by default for the requested assistant workflow and can be disabled in settings. The Terminal Desk toolbar opens settings. Clear spoken commands execute without repeated confirmation; Gemini asks when the target or destructive action is ambiguous.
 
-This first stage is a local command interface, not a general language model. Unknown requests are not executed. No additional provider/network calls are made by the chat panel. Chat history is bounded and held in memory; Clear chat removes it. Click now opens the assistant; Wave remains in the pet menu. See docs/assistant-roadmap.md for planned, unimplemented stages.
-
-## General AI chat — stage 2
-
-Unrecognized local commands now go to Claude using the installed `~/.local/bin/claude` login. The banner makes this explicit. Local `status`, `agents`, `focus`, `walk`, and `help` still run locally. Claude's normal usage limits apply.
-
-Attach files opens a file picker: UTF-8 text only, up to 24 KB each and 48 KB total. Filenames and byte count are visible; attachment content is captured at selection time. Each AI request sends the message, the last four AI exchanges (bounded answer length), and the selected file content. No terminal snapshots, directories, or other context are added automatically. Remove files prevents resending the attachments; prior AI replies may still reflect their contents until Clear chat. Clear chat stops a request and clears conversation memory, but attachments stay visible until Remove files.
-
-AI runs in an isolated temporary working directory using Claude safe mode, no tools, no MCP servers, a dedicated system prompt, and no session persistence. It cannot execute commands or edit files. This relies on the installed Claude CLI supporting those flags; errors are shown rather than retrying with weaker settings. Claude retains its own service-side data policies and account behavior. Stop AI terminates the local request; it does not guarantee remote usage was not incurred. Requests time out after two minutes. Responses appear when complete.
-
-Validation includes a live minimal Claude request with no attached files (returned OK), native build/self-tests, and a rendered assistant layout. Memory, voice, external accounts, and approved action execution remain later stages.
+Audio startup uses the output device’s native format and retries without echo cancellation if voice processing fails. Use headphones when the fallback notice appears. If both attempts fail, the voice window shows the native error domain/code; select working input and output devices in macOS Sound settings and retry.

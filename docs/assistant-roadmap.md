@@ -1,10 +1,3 @@
-# Personal assistant roadmap
+# Direction update
 
-1. Implemented: local chat panel, recent attention reports with sources, detected-agent list, connected-Claude picker, focus and walk commands, clear in-memory chat.
-2. Implemented: general AI conversation using the existing Claude CLI login; explicitly attached text files with visible data-access scope, stop, bounded conversation, and no tools.
-3. Later: reviewable command/action proposals with explicit approval, results, and cancellation. No arbitrary shell execution in stage 1.
-4. Later: explicit saved preferences and memory with view/delete controls.
-5. Later: push-to-talk voice with microphone permission and visible recording state.
-6. Optional integrations: calendar and email using user-selected accounts and narrow access. Sending messages requires explicit user approval.
-
-A stage being listed here does not mean it has been built. Existing live Claude controls remain separate from general assistant chat.
+The chat-style personal assistant and general AI chat were removed at the user’s request. The current interface is a multi-tab interactive terminal above the pet. Memory, voice, external-account integrations, and AI action proposals are not being implemented in this change.
