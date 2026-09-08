@@ -170,3 +170,5 @@ Validation: native build/self-tests include tool argument validation. `"build/Ba
 Protocol references: [Google Live WebSocket reference](https://ai.google.dev/api/live) and [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
 
 The **Voice** microphone button directly below the pet opens Gemini voice controls. It follows the pet when dragged and stays visible at both pet sizes. Opening it does not start the microphone; use **Start voice** when ready. The Terminal Desk toolbar also has a Voice button.
+
+Audio startup uses the output device’s native format and retries without echo cancellation if voice processing fails. Use headphones when the fallback notice appears. If both attempts fail, the voice window shows the native error domain/code; select working input and output devices in macOS Sound settings and retry.

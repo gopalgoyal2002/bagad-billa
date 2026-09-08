@@ -993,6 +993,12 @@ if CommandLine.arguments.contains("--self-test") {
     for i in 0..<100 { activity.pulse(at: 20+Double(i)*0.01) }
     precondition(activity.presses.count == 40 && activity.cadence(at: 21) == 0.065)
     print("PASS: life/focus/break transitions, excursion return, typing speed/storage; 16 cursor directions, compass cases, deadzone, typing renewal/expiry, and sprite resources")
+} else if CommandLine.arguments.contains("--audio-startup-smoke") {
+    _ = NSApplication.shared
+    let desk = TerminalDesk(); let voice = GeminiVoice(desk: desk)
+    do { try voice.startAudio(); print("PASS: audio engine started; no network session or audio storage") }
+    catch { let e = error as NSError; print("FAIL: \(e.domain) \(e.code)") }
+    voice.stop(); desk.shutdown()
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-voice"), CommandLine.arguments.count > index+1 {
     _ = NSApplication.shared
     let desk = TerminalDesk(); let voice = GeminiVoice(desk: desk)

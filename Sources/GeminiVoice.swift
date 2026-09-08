@@ -148,7 +148,7 @@ final class GeminiVoice: NSObject, NSWindowDelegate, @unchecked Sendable {
         if message["setupComplete"] != nil {
             connected = true; starting = false
             do { try startAudio(); status.stringValue = "● LIVE — microphone audio is being sent to Gemini"; note("Connected. Terminal actions: "+(actions.state == .on ? "enabled" : "disabled")) }
-            catch { fail("Could not start microphone/speakers. Check your audio devices.") }
+            catch { let e = error as NSError; fail("Audio startup failed (\(e.domain), \(e.code)). Select an input and output in System Settings → Sound, then retry.") }
         }
         if let cancellation = message["toolCallCancellation"] as? [String:Any],let ids = cancellation["ids"] as? [String] { cancelledCalls.formUnion(ids) }
         if let content = message["serverContent"] as? [String:Any] {
@@ -179,14 +179,33 @@ final class GeminiVoice: NSObject, NSWindowDelegate, @unchecked Sendable {
         }
         if message["goAway"] != nil { note("Gemini session will expire soon. Stop and reconnect when ready.") }
     }
+    func releaseAudio() {
+        if tapInstalled { engine?.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        player?.stop(); engine?.stop(); player = nil; engine = nil
+    }
     func startAudio() throws {
+        do { try configureAudio(voiceProcessing: true) }
+        catch {
+            let e = error as NSError
+            note("Echo cancellation unavailable (\(e.domain), \(e.code)); retrying standard audio. Use headphones to avoid echo.")
+            releaseAudio()
+            do { try configureAudio(voiceProcessing: false) }
+            catch { releaseAudio(); throw error }
+        }
+    }
+    func configureAudio(voiceProcessing: Bool) throws {
         let engine = AVAudioEngine(); let player = AVAudioPlayerNode(); self.engine = engine; self.player = player
         let input = engine.inputNode
-        try? input.setVoiceProcessingEnabled(true)
+        if voiceProcessing { try input.setVoiceProcessingEnabled(true) }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0,format.channelCount > 0,format.commonFormat == .pcmFormatFloat32 else { throw NSError(domain: "VoiceAudio",code: 1) }
         let output = AVAudioFormat(commonFormat: .pcmFormatFloat32,sampleRate: 24000,channels: 1,interleaved: false)!
-        engine.attach(player); engine.connect(player,to: engine.mainMixerNode,format: output)
+        let hardware = engine.outputNode.inputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0 else { throw NSError(domain: "VoiceAudioOutput", code: 2) }
+        engine.attach(player)
+        let mixer = engine.mainMixerNode
+        engine.connect(mixer, to: engine.outputNode, format: hardware)
+        engine.connect(player, to: mixer, format: output)
         let token = generation
         input.installTap(onBus: 0,bufferSize: 4096,format: format) { [weak self] buffer,_ in
             guard let samples = buffer.floatChannelData?[0] else { return }
@@ -222,8 +241,7 @@ final class GeminiVoice: NSObject, NSWindowDelegate, @unchecked Sendable {
     }
     @objc func stop() {
         generation = UUID(); connected = false; starting = false; muted = true
-        if tapInstalled { engine?.inputNode.removeTap(onBus: 0); tapInstalled = false }
-        player?.stop(); engine?.stop(); player = nil; engine = nil; playbackCount = 0; pendingAudio = 0; playbackGeneration = UUID()
+        releaseAudio(); playbackCount = 0; pendingAudio = 0; playbackGeneration = UUID()
         socket?.cancel(with: .normalClosure,reason: nil); socket = nil; network?.invalidateAndCancel(); network = nil; outgoing?.cancel(); outgoing = nil
         status.stringValue = "Disconnected · microphone off"; micButton.title = "Mute"
     }
