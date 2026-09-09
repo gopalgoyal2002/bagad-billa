@@ -49,19 +49,28 @@ Right-click the cat or click the menu-bar paw to access all controls.
 - **Petting:** rub the pointer across its head for closed eyes and a heart. Pet Bagad Billa triggers it manually.
 - **Treats:** Give a fish treat, then click the fish for a short pounce and return. Unused fish disappear after 20 seconds.
 - **Sleep:** automatic nap after 3 minutes without mouse movement or detected typing; movement/typing wakes it. Nap now is available. Music mode prevents automatic idle naps.
-- **Cursor play:** occasional short chases when the moving cursor is nearby, with at least 75 seconds between automatic attempts. Disable Occasional cursor play or trigger Play with cursor manually.
+- **Cursor play:** occasional short chases when the moving cursor is nearby, with 45 to 150 seconds between automatic attempts depending on mood. Disable Occasional cursor play or trigger Play with cursor manually.
 - **Walking reminders:** enabled by default, every 20 minutes while running. “Stand up & take a short walk” displays for 30 seconds, including during focus and pet naps. Preview walk reminder triggers it immediately. Toggle reminders in the menu.
 - **Stretch reminders:** every 30 minutes while awake, with a brief paw-up animation. Focus and sleep defer these reminders. Stretch now is available.
 - **Focus:** start 25-minute or 5-minute sessions, or try a 10-second preview. The cat naps, shows a countdown, and jumps when done. Cancel from the menu.
 - **Homes:** choose a cushion, cardboard box, or no home. The cat settles lower in its box during sleep/petting.
 - **Headphones:** automatic mode checks whether the default audio output device is active. It cannot distinguish music from notifications, silent streams, or apps keeping audio open. Manual music mode works with any player. Head bobbing is decorative, not synchronized to beats; headphones also work during typing.
+- **Wardrobe:** the **Wardrobe** submenu dresses the cat in sunglasses (light frames, translucent teal tint), a monocle, a bow tie, a knit scarf, and one hat at a time: party hat, crown, Santa hat, witch hat, or nightcap. Everything follows all sixteen gaze directions and idle poses, stays on while typing, napping, and being petted, and can be worn with headphones. Accessories hide briefly during wave, jump, chase, and other action sprites. Choices are remembered. **Seasonal hats** (on by default) add a Santa hat from 1 to 26 December and a witch hat from 24 to 31 October using the Mac's clock, unless you picked a hat yourself.
+- **Bedtime:** pick 10 PM, 11 PM, midnight, or 1 AM under **Bedtime nightcap and nudge**. From then until 5 AM the cat wears a nightcap and, while awake, yawns and says "It's late. Go to bed." every 20 minutes. Off by default.
+- **Mood:** a 0 to 100 mood shown in the menu drifts down one point every ten minutes and rises with petting, treats, water, yarn, laser play, and finished focus sessions. Delighted cats chase the cursor more often, neglected ones less; a neglected cat grumbles "Hmph." now and then and says "Took you long enough." when you finally pet it. Mood is saved and keeps decaying while the app is closed, capped at 40 points lost.
+- **Laser pointer:** **Laser pointer for 30 seconds** makes the cat run after the cursor wherever it goes, then stop and save its new spot.
+- **Yarn ball:** **Toss a yarn ball** throws a ball that rolls, slows, and bounces off screen edges. The cat walks over and bats it four times, then loses interest. Click the ball to kick it yourself.
+- **Strolls:** **Occasional strolls along the screen** lets the cat wander to a new spot along its row every 25 to 35 minutes when nothing else is happening. Off by default because it moves the saved position.
+- **Water and eye rest:** **Water reminders every 45 minutes** put a bowl beside the cat; click it and the cat walks over to drink. **Eye rest every 20 minutes** makes the cat stare into the distance for 20 seconds with a countdown so you can follow the 20-20-20 rule. Both are off by default, defer during focus and naps, and have preview items.
+- **Focus stats:** the menu shows how many focus sessions of five minutes or longer finished today. The count resets at midnight.
+- **Work reactions:** with the zsh integration below, failed commands get the thinking pose, long successes get a jump, five successes in a row earn a dance, and git pushes, commits, and merges are celebrated. In the pet's own terminal tabs, a terminal bell makes the cat wave at you.
 - **Sounds:** optional synthesized purr and completion/reminder chime. Sounds and purring is off by default.
 
 ## Timing, preferences, and limitations
 
 The companion must be running for reminders. There are no scheduled background jobs or automatic login startup items. Restarting begins fresh countdowns; missed walk reminders do not queue up. Re-enabling walk reminders starts a fresh 20 minutes. Focus timing uses system uptime and is not intended as an alarm while the Mac is asleep.
 
-Position, typing toggle, automatic nap/play/reminder toggles, sound preference, home, and automatic audio mode use macOS UserDefaults. Size, manual headphones, cursor pause, and active focus timers are session-only.
+Position, typing toggle, automatic nap/play/reminder toggles, water and eye-rest toggles, strolls, sound preference, home, wardrobe, seasonal hats, bedtime, mood, the daily focus count, and automatic audio mode use macOS UserDefaults. Size, manual headphones, cursor pause, and active focus timers are session-only.
 
 If the cat is hidden, use **paw menu → Reset position**. If you see two cats, quit the other standalone copy or hide the separate Codex pet. This app currently has no single-instance enforcement across different bundle copies.
 
@@ -74,9 +83,10 @@ The keyboard handlers observe event timing only: they do not read characters/key
 ```bash
 ./scripts/test.sh
 "build/Bagad Billi.app/Contents/MacOS/BagadBilli" --render-gallery "$PWD/build/features-preview.png"
+"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --render-wardrobe "$PWD/build/wardrobe-preview.png" sunglasses,bowtie,partyHat
 ```
 
-Tests cover sixteen directions, compass/deadzone cases, typing expiry and cadence/storage, sleep/wake, focus completion, reminder timing and disabled behavior, excursion return, and sprite availability. Gallery rendering requires a logged-in macOS GUI session. Real cross-app typing requires user-granted Accessibility permission; deterministic tests do not prove that system permission is granted.
+Tests cover sixteen directions, compass/deadzone cases, typing expiry and cadence/storage, sleep/wake, focus completion, reminder timing and disabled behavior, excursion return and pursuit, sprite availability, wardrobe anchors for every idle and gaze pose, terminal reaction messages and streaks, mood decay and labels, bedtime and seasonal date logic, and yarn physics. The wardrobe render takes a comma-separated list of outfit names (sunglasses, monocle, bowtie, scarf, partyHat, crown, santaHat, witchHat, nightcap) and shows the sixteen gaze poses plus the six idle frames wearing them, with headphones on the idle frames. Gallery rendering requires a logged-in macOS GUI session. Real cross-app typing requires user-granted Accessibility permission; deterministic tests do not prove that system permission is granted.
 
 Optional startup diagnostics (no typed text):
 
@@ -108,6 +118,8 @@ This repository is publicly readable; public visibility permits viewing and fork
 
 Headphone fit uses per-direction ear anchors and the same drawing transform as the cat, including breathing and box settling. Profile views hide the far ear cup. Headphones temporarily hide during action sprites without fitted anchors and return for idle, gaze, and typing poses.
 
+Wardrobe items reuse those anchors. Sunglasses and the monocle use per-pose lens anchors for the sixteen gaze poses and six idle frames; three-quarter poses narrow the far lens and profile poses show a single lens with a temple arm toward the ear. The bow tie and scarf sit a fixed distance below the eyes and drift toward the body's center line as the head turns. Hats sit midway between the ear anchors, and the pet view keeps extra room above the sprite so tall hats are not clipped. Everything shares the cat's breathing and box-settling transform and hides during the same action sprites as headphones.
+
 ## Terminal notifications (zsh)
 
 Source the integration from your `~/.zshrc`, using the absolute path to this checkout:
@@ -118,13 +130,13 @@ source /absolute/path/to/bagad-billa/integrations/bagad-billa.zsh
 
 Open a new terminal tab, or run that source command in an existing zsh tab. This works in IDE terminals that start interactive zsh and load that configuration, as well as standalone terminals. Bash, fish, remote hosts, containers, and IDE task runners that do not load this shell configuration are not automatically covered.
 
-Failures are reported when the shell returns to its prompt. Successful commands are reported if they ran for at least three seconds. For explicit input/approval requests, run `bagad-help` before the waiting operation. Arbitrary prompts are not inferred from terminal output. A foreground command still running cannot automatically report its own need for input unless it explicitly integrates this signal.
+Failures are reported when the shell returns to its prompt. Successful commands are reported if they ran for at least three seconds. The cat reacts as well: a failure gets the thinking pose and "That's on you."; a success that ran ten seconds or longer gets a jump and "Finally."; every fifth success in a row earns a short dance and "5 in a row. Show-off."; and a successful `git push`, `git commit`, or `git merge` is reported as a milestone with a dance. Reactions also nudge the cat's mood. For explicit input/approval requests, run `bagad-help` before the waiting operation. Arbitrary prompts are not inferred from terminal output. A foreground command still running cannot automatically report its own need for input unless it explicitly integrates this signal.
 
 The cat displays an alert for 12 seconds and retains the latest 12 alerts under Recent terminal activity. Terminal notifications can be disabled in its menu. Alerts identify the terminal device (for example ttys001); exact IDE-tab activation is not implemented.
 
-Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device label, and coarse terminal application category are written locally. No command text, arguments, working directory, terminal output, or credentials are captured. Events use private files under `~/Library/Application Support/BagadBilli/events`, overwritten per shell process. The companion reads bounded files once per second and ignores stale events. Very rapid events from the same shell can be coalesced. This is a local convenience notification channel, not a security audit log; another process running as your user can write to it.
+Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device label, and coarse terminal application category are written locally. No command text, arguments, working directory, terminal output, or credentials are captured. To recognize git milestones, the hook checks inside your shell whether the command line began with `git push`, `git commit`, or `git merge`; the command line itself is never written anywhere. Events use private files under `~/Library/Application Support/BagadBilli/events`, overwritten per shell process. The companion reads bounded files once per second and ignores stale events. Very rapid events from the same shell can be coalesced. This is a local convenience notification channel, not a security audit log; another process running as your user can write to it.
 
-Try `sleep 3`, then `false`, then `bagad-help`. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
+Try `sleep 3`, then `false`, then `bagad-help`, then a real `git commit` for the dance. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
 
 ## Terminals above the pet
 
@@ -137,6 +149,7 @@ The Agent Desk, process scan, connected-agent cards, and personal-assistant/AI c
 - Use the tabs to switch between sessions. **Copy** copies selected terminal text; **Paste** uses the terminal's paste handling.
 - Closing the terminal window hides it and keeps sessions running. Click the cat to reopen it.
 - **End tab** asks before closing its shell. Quitting the pet closes all of its terminal sessions. Commands may be interrupted; save your work first.
+- When a program in a pet tab rings the terminal bell, for example Claude Code waiting at a permission prompt, the cat waves and shows "Terminal 2 needs you" for ten seconds, unless that tab is already selected in the frontmost Terminal Desk window. Bells are limited to one reaction every eight seconds and follow the **Terminal notifications** toggle. The bell byte is the only terminal output the pet inspects.
 
 This is an interactive zsh terminal, not an AI command interpreter. Commands you type have your normal account access and run immediately, just like a normal terminal. The app neither auto-approves Claude prompts nor supplies commands on your behalf. Your ordinary shell startup files and history settings apply. Embedded terminal scrollback stays in memory (3,000 lines); it is not added to a separate pet transcript. Existing optional bagad-claude launcher sessions still work separately.
 
