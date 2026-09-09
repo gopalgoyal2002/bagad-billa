@@ -105,3 +105,70 @@ See [AUTHORS.md](AUTHORS.md) for credits.
 All changes to `main` require a pull request, code-owner approval, passing macOS checks, and resolved review conversations. Direct pushes, force pushes, and branch deletion are blocked by repository protection, including for administrators. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 This repository is publicly readable; public visibility permits viewing and forking, not editing this repository. Its owner can manage access and change protection settings. No open-source license has been selected for this project.
+
+Headphone fit uses per-direction ear anchors and the same drawing transform as the cat, including breathing and box settling. Profile views hide the far ear cup. Headphones temporarily hide during action sprites without fitted anchors and return for idle, gaze, and typing poses.
+
+## Terminal notifications (zsh)
+
+Source the integration from your `~/.zshrc`, using the absolute path to this checkout:
+
+```zsh
+source /absolute/path/to/bagad-billa/integrations/bagad-billa.zsh
+```
+
+Open a new terminal tab, or run that source command in an existing zsh tab. This works in IDE terminals that start interactive zsh and load that configuration, as well as standalone terminals. Bash, fish, remote hosts, containers, and IDE task runners that do not load this shell configuration are not automatically covered.
+
+Failures are reported when the shell returns to its prompt. Successful commands are reported if they ran for at least three seconds. For explicit input/approval requests, run `bagad-help` before the waiting operation. Arbitrary prompts are not inferred from terminal output. A foreground command still running cannot automatically report its own need for input unless it explicitly integrates this signal.
+
+The cat displays an alert for 12 seconds and retains the latest 12 alerts under Recent terminal activity. Terminal notifications can be disabled in its menu. Alerts identify the terminal device (for example ttys001); exact IDE-tab activation is not implemented.
+
+Only event kind, numeric exit code, elapsed seconds, timestamp, terminal device label, and coarse terminal application category are written locally. No command text, arguments, working directory, terminal output, or credentials are captured. Events use private files under `~/Library/Application Support/BagadBilli/events`, overwritten per shell process. The companion reads bounded files once per second and ignores stale events. Very rapid events from the same shell can be coalesced. This is a local convenience notification channel, not a security audit log; another process running as your user can write to it.
+
+Try `sleep 3`, then `false`, then `bagad-help`. To uninstall, remove the source line from `.zshrc` and start fresh terminal tabs. Existing tabs retain their hooks until closed. The integration does not execute commands on your behalf.
+
+## Terminals above the pet
+
+The Agent Desk, process scan, connected-agent cards, and personal-assistant/AI chat have been removed. Terminal Desk opens above the pet on startup. Click the cat, or use **Open terminals** in its menu, to reopen it. The title shows the number of open tabs. Each tab is an independent terminal; switch tabs to view its output.
+
+- Type `claude` normally, just as in another terminal. No special launcher is needed for using Claude here.
+- **+ Terminal** starts another independent zsh session in your home folder.
+- **+ In folder…** lets you choose the working directory for a new tab.
+- Drag a window edge to resize, or click **Expand** to zoom. Shell rows/columns update with the view.
+- Use the tabs to switch between sessions. **Copy** copies selected terminal text; **Paste** uses the terminal's paste handling.
+- Closing the terminal window hides it and keeps sessions running. Click the cat to reopen it.
+- **End tab** asks before closing its shell. Quitting the pet closes all of its terminal sessions. Commands may be interrupted; save your work first.
+
+This is an interactive zsh terminal, not an AI command interpreter. Commands you type have your normal account access and run immediately, just like a normal terminal. The app neither auto-approves Claude prompts nor supplies commands on your behalf. Your ordinary shell startup files and history settings apply. Embedded terminal scrollback stays in memory (3,000 lines); it is not added to a separate pet transcript. Existing optional bagad-claude launcher sessions still work separately.
+
+Rendering uses locally bundled xterm.js 5.5.0 and addon-fit 0.10.0, with their MIT licenses in Resources/terminal. No CDN or local network server is used. A Python helper owns each pseudo-terminal over private process pipes. The web view is limited to its bundled page, blocks network content, and receives output as bytes rather than HTML. Python and WebKit are needed at runtime, in addition to the macOS requirements above.
+
+Tests: `PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_terminal_host.py` verifies shell execution, resize, Ctrl-C, tab isolation, and shutdown using harmless commands. A logged-in GUI session can run `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --terminal-smoke "$PWD/build/terminal-preview.png"` to verify real shell output reaches the embedded renderer. These tests require PTY access.
+
+## Gemini Live voice for pet terminals
+
+Click **Voice** in Terminal Desk. Enter a Gemini API key in the secure field (never in source code or chat), keep the suggested Live model or enter one available to your account, and click **Start voice**. Grant macOS microphone permission when asked. The key is saved in macOS Keychain, not preferences, source, or logs. Use **Forget saved key** in voice settings to remove it. macOS may request Keychain access after an app update. Google API billing/quota applies; a consumer Gemini subscription is not automatically an API credential.
+
+To allow actions, enable **Allow voice to control this pet’s terminals**. Try:
+
+- “List my terminals.”
+- “Create a new terminal.”
+- “In terminal 2, type claude and press Enter.”
+- “Send hello to terminal 2 without pressing Enter.”
+- “Send Control-C to terminal 2.”
+- “Press Escape in terminal 2.”
+
+IDs are the stable numbers shown in the tab labels for this app run. New tabs start in your home directory. Only ready, running tabs created by the pet can receive input. Input is a single line, up to 16 KB; control characters are rejected except the separately implemented Enter and interrupt keys. A queued input result does not mean its command succeeded. Claude-specific interactive prompts remain Claude’s responsibility; the voice feature does not auto-approve them. Commands spoken and submitted have your normal terminal permissions. Watch the selected terminal to see actions and their output. Disable terminal control when only chatting.
+
+**Mute** stops sending microphone chunks while leaving the connection/audio engine open; **Stop** disconnects and releases audio capture/playback. Closing settings leaves voice running in the pet bar. **End**, the **Stop** button, saying “hang up”, or quitting the pet stops voice. No background listening starts at launch. Talking over Gemini clears its queued reply audio when the server reports interruption. Use headphones if your audio device's echo cancellation is unavailable. Reconnect after session expiry or device/network failures; session resumption is not implemented.
+
+Scope is intentionally limited to listing/creating pet terminals, sending requested text, and Ctrl-C/Escape. It has no access to external terminal windows, files, or pet configuration. With **Share recent pet terminal output with Gemini** enabled, changed snapshots are sent every four seconds: up to eight tabs, the last 60 rendered lines and at most 4,000 characters per tab. This can include private terminal text; disable sharing to stop future snapshots (already sent context remains in the current session). Snapshots may be truncated or stale. Terminal context is untrusted data and cannot authorize commands. The voice stream, transcription, tool definitions, terminal IDs/folder labels, and tool results are exchanged with Google while connected. Audio/transcripts are not saved to disk; there is no conversation UI. Google's service data policies still apply. The app keeps a per-session tool-call cache so duplicate IDs do not repeat actions and ignores cancelled or post-disconnect calls.
+
+Implementation: native AVAudioEngine microphone/playback and an ephemeral URLSession WebSocket to Google's Live API. Sends 16-bit PCM at the input device's reported rate (Gemini supports resampling) and plays 24 kHz PCM replies. Uses `gemini-3.1-flash-live-preview` by default; preview availability can change. No extra package or server is required.
+
+Validation: native build/self-tests include tool argument validation. `"build/Bagad Billi.app/Contents/MacOS/BagadBilli" --voice-tool-smoke` uses synthetic model calls and real owned shell tabs to test disabled control, stable target routing, duplicate suppression, actual shell delivery, cancellation, and the stop gate. It makes no Gemini request and does not open the microphone. Live authentication, speech recognition, microphone hardware, and reply playback require testing with your key and devices.
+
+Protocol references: [Google Live WebSocket reference](https://ai.google.dev/api/live) and [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
+
+The **Voice** button beneath the cat opens setup the first time; after saving a key it starts voice directly. The compact bar shows connection, incoming/outgoing audio packet activity, and mute state. **Mute** toggles the microphone stream; **End** hangs up; **⚙** opens settings. Terminal controls and context sharing are enabled by default for the requested assistant workflow and can be disabled in settings. The Terminal Desk toolbar opens settings. Clear spoken commands execute without repeated confirmation; Gemini asks when the target or destructive action is ambiguous.
+
+Audio startup uses the output device’s native format and retries without echo cancellation if voice processing fails. Use headphones when the fallback notice appears. If both attempts fail, the voice window shows the native error domain/code; select working input and output devices in macOS Sound settings and retry.
